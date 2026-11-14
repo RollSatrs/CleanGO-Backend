@@ -1,30 +1,86 @@
-import { Body, Controller, Get, Headers, Patch, Post, UnauthorizedException } from "@nestjs/common";
-import { IsIn, IsString, MinLength } from "class-validator";
+
+import {
+  Body,
+  Controller,
+  Get,
+  Post,
+  Req,
+  UseGuards,
+} from "@nestjs/common";
+
+import {
+  IsNotEmpty,
+  IsString,
+  Matches,
+  MaxLength,
+} from "class-validator";
+
+import type { Request } from "express";
+
 import { AuthService } from "./auth.service.js";
+import {
+  AuthGuard,
+  type AuthenticatedRequest,
+} from "./auth.guard.js";
 
 class TelegramLoginDto {
   @IsString()
-  @MinLength(1)
+  @IsNotEmpty()
   initData!: string;
 }
-class SelectRoleDto {
-  @IsIn(["client", "cleaner"])
-  role!: "client" | "cleaner";
+
+class PhoneCodeDto {
+  @IsString()
+  @Matches(/^\+[1-9]\d{7,14}$/)
+  phone!: string;
 }
-function bearer(header?: string): string {
-  const match = /^Bearer (\S+)$/i.exec(header ?? "");
-  if (!match) throw new UnauthorizedException("Bearer token required");
-  return match[1];
+
+class VerifyPhoneDto extends PhoneCodeDto {
+  @IsString()
+  @Matches(/^\d{4,10}$/)
+  @MaxLength(10)
+  code!: string;
 }
+
 @Controller("auth")
 export class AuthController {
-  constructor(private readonly auth: AuthService) {}
+  constructor(
+    private readonly authService: AuthService,
+  ) {}
+
   @Post("telegram")
-  login(@Body() body: TelegramLoginDto) { return this.auth.telegram(body.initData); }
+  loginTelegram(
+    @Body() body: TelegramLoginDto,
+  ) {
+    return this.authService.loginWithTelegram(
+      body.initData,
+    );
+  }
+
+  @Post("phone/send-code")
+  sendCode(
+    @Body() body: PhoneCodeDto,
+  ) {
+    return this.authService.sendPhoneCode(
+      body.phone,
+    );
+  }
+
+  @Post("phone/verify")
+  verifyPhone(
+    @Body() body: VerifyPhoneDto,
+  ) {
+    return this.authService.verifyPhoneCode(
+      body.phone,
+      body.code,
+    );
+  }
+
+  @UseGuards(AuthGuard)
   @Get("me")
-  me(@Headers("authorization") header?: string) { return this.auth.me(bearer(header)); }
-  @Patch("role")
-  role(@Headers("authorization") header: string | undefined, @Body() body: SelectRoleDto) {
-    return this.auth.setRole(bearer(header), body.role);
+  getMe(
+    @Req() request: Request,
+  ) {
+    return (request as AuthenticatedRequest).user;
   }
 }
