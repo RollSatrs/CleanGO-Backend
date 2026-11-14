@@ -1,11 +1,11 @@
 
 import { Injectable } from "@nestjs/common";
+import { eq, desc } from "drizzle-orm";
 
 import { db } from "../db/index.js";
 import { orders } from "../db/schema.js";
 
 import { PricingService } from "../pricing/pricing.service.js";
-
 import { CreateOrderDto } from "./dto/create-order.dto.js";
 
 @Injectable()
@@ -14,17 +14,19 @@ export class OrdersService {
     private readonly pricingService: PricingService,
   ) {}
 
-  async create(orderData: CreateOrderDto) {
-    // 1. Рассчитываем стоимость уборки
+  async create(
+    userId: string,
+    orderData: CreateOrderDto,
+  ) {
     const quote = this.pricingService.calculate(
       orderData.cleaningType,
       orderData.area,
     );
 
-    // 2. Сохраняем заказ вместе со стоимостью
     const [order] = await db
       .insert(orders)
       .values({
+        userId,
         address: orderData.address,
         area: orderData.area,
         cleaningType: orderData.cleaningType,
@@ -33,11 +35,14 @@ export class OrdersService {
       })
       .returning();
 
-    // 3. Возвращаем созданный заказ
     return order;
   }
 
-  async findAll() {
-    return db.select().from(orders);
+  async findByUserId(userId: string) {
+    return db
+      .select()
+      .from(orders)
+      .where(eq(orders.userId, userId))
+      .orderBy(desc(orders.createdAt));
   }
 }

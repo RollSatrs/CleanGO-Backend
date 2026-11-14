@@ -22,6 +22,13 @@
       "when": 1794560363906,
       "tag": "0002_flaky_nextwave",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1794642584123,
+      "tag": "0003_broken_retro_girl",
+      "breakpoints": true
     }
   ]
 }
