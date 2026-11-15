@@ -6,6 +6,7 @@ import {
   Post,
   Req,
   UseGuards,
+  ForbiddenException,
 } from "@nestjs/common";
 
 import type { Request } from "express";
@@ -33,6 +34,10 @@ export class OrdersController {
     const user = (
       request as AuthenticatedRequest
     ).user;
+
+    if (user.role !== "client" || !user.phoneVerifiedAt) {
+      throw new ForbiddenException("Для заказа требуется подтверждённый номер клиента");
+    }
 
     return this.ordersService.create(
       user.id,
