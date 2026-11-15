@@ -6,7 +6,8 @@ import {
   InternalServerErrorException,
   UnauthorizedException,
   ConflictException,
-  TooManyRequestsException,
+  HttpException,
+  HttpStatus,
 } from "@nestjs/common";
 
 import { createHmac, timingSafeEqual } from "node:crypto";
@@ -144,10 +145,10 @@ export class AuthService {
     const key = userId;
     const previous = this.smsAttempts.get(key);
     if (previous && now - previous.sentAt < 60_000) {
-      throw new TooManyRequestsException("Повторная отправка доступна через минуту");
+      throw new HttpException("Повторная отправка доступна через минуту", HttpStatus.TOO_MANY_REQUESTS);
     }
     const attempts = previous && now - previous.windowStart < 3_600_000 ? previous.attempts : 0;
-    if (attempts >= 5) throw new TooManyRequestsException("Лимит SMS исчерпан. Попробуйте позже");
+    if (attempts >= 5) throw new HttpException("Лимит SMS исчерпан. Попробуйте позже", HttpStatus.TOO_MANY_REQUESTS);
 
     const [taken] = await db.select({ id: users.id }).from(users)
       .where(eq(users.phone, normalizedPhone)).limit(1);
