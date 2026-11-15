@@ -5,6 +5,8 @@ import {
   Injectable,
   InternalServerErrorException,
   UnauthorizedException,
+  ConflictException,
+  TooManyRequestsException,
 } from "@nestjs/common";
 
 import { createHmac, timingSafeEqual } from "node:crypto";
@@ -18,6 +20,7 @@ export type AuthUser = {
   id: string;
   telegramId: string | null;
   phone: string | null;
+  phoneVerifiedAt: Date | null;
   firstName: string | null;
   lastName: string | null;
   role: string;
@@ -133,86 +136,41 @@ export class AuthService {
   // SEND PHONE CODE
   // ==========================================
 
-  async sendPhoneCode(phone: string) {
+  private readonly smsAttempts = new Map<string, { sentAt: number; attempts: number; windowStart: number }>();
+
+  async sendPhoneCode(userId: string, phone: string) {
     const normalizedPhone = this.validatePhone(phone);
+    const now = Date.now();
+    const key = userId;
+    const previous = this.smsAttempts.get(key);
+    if (previous && now - previous.sentAt < 60_000) {
+      throw new TooManyRequestsException("Повторная отправка доступна через минуту");
+    }
+    const attempts = previous && now - previous.windowStart < 3_600_000 ? previous.attempts : 0;
+    if (attempts >= 5) throw new TooManyRequestsException("Лимит SMS исчерпан. Попробуйте позже");
 
-    await this.twilioRequest("Verifications", {
-      To: normalizedPhone,
-      Channel: "sms",
-    });
+    const [taken] = await db.select({ id: users.id }).from(users)
+      .where(eq(users.phone, normalizedPhone)).limit(1);
+    if (taken && taken.id !== userId) throw new ConflictException("Этот номер уже используется");
 
-    return {
-      message: "Если номер доступен, код отправлен",
-    };
+    // Reserve the rate-limit slot before making a paid external request.
+    this.smsAttempts.set(key, { sentAt: now, attempts: attempts + 1, windowStart: attempts ? previous!.windowStart : now });
+    await this.twilioRequest("Verifications", { To: normalizedPhone, Channel: "sms" });
+    return { message: "Если номер доступен, код отправлен" };
   }
 
-  // ==========================================
-  // VERIFY PHONE CODE
-  // ==========================================
-
-  async verifyPhoneCode(phone: string, code: string) {
+  async verifyPhoneCode(userId: string, phone: string, code: string) {
     const normalizedPhone = this.validatePhone(phone);
+    if (!/^\\d{4,10}$/.test(code)) throw new BadRequestException("Неверный формат кода");
+    const result = await this.twilioRequest("VerificationCheck", { To: normalizedPhone, Code: code });
+    if (result.status !== "approved") throw new UnauthorizedException("Неверный или просроченный код");
 
-    if (!/^\d{4,10}$/.test(code)) {
-      throw new BadRequestException(
-        "Неверный формат кода",
-      );
-    }
-
-    const result = await this.twilioRequest(
-      "VerificationCheck",
-      {
-        To: normalizedPhone,
-        Code: code,
-      },
-    );
-
-    if (result.status !== "approved") {
-      throw new UnauthorizedException(
-        "Неверный или просроченный код",
-      );
-    }
-
-    const existing = await db
-      .select()
-      .from(users)
-      .where(eq(users.phone, normalizedPhone))
-      .limit(1);
-
-    let user = existing[0];
-
-    if (!user) {
-      const [created] = await db
-        .insert(users)
-        .values({
-          phone: normalizedPhone,
-          role: "unselected",
-        })
-        .onConflictDoNothing({
-          target: users.phone,
-        })
-        .returning();
-
-      if (created) {
-        user = created;
-      } else {
-        const [found] = await db
-          .select()
-          .from(users)
-          .where(eq(users.phone, normalizedPhone))
-          .limit(1);
-
-        user = found;
-      }
-    }
-
-    if (!user) {
-      throw new InternalServerErrorException(
-        "Не удалось создать пользователя",
-      );
-    }
-
-    return this.createSession(user);
+    const [updated] = await db.update(users)
+      .set({ phone: normalizedPhone, phoneVerifiedAt: new Date() })
+      .where(eq(users.id, userId)).returning();
+    if (!updated) throw new UnauthorizedException("Пользователь не найден");
+    this.smsAttempts.delete(userId);
+    return this.toPublicUser(updated);
   }
 
   // ==========================================
@@ -491,6 +449,7 @@ export class AuthService {
       telegramId:
         user.telegramId?.toString() ?? null,
       phone: user.phone,
+      phoneVerifiedAt: user.phoneVerifiedAt,
       firstName: user.firstName,
       lastName: user.lastName,
       role: user.role,
