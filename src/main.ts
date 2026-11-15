@@ -14,7 +14,7 @@ async function bootstrap() {
         "https://clean-go-frontend.vercel.app",
         ...(process.env.FRONTEND_URL ?? "")
           .split(",")
-          .map((value) => value.trim().replace(/\\/$/, ""))
+          .map((value) => value.trim().replace(/\/$/, ""))
           .filter(Boolean),
       ]);
       const isDevTunnel = Boolean(origin) &&
