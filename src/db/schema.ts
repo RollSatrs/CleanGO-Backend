@@ -29,7 +29,7 @@ export const users = pgTable(
 
     role: text("role")
       .notNull()
-      .default("client"),
+      .default("unselected"),
 
     createdAt: timestamp("created_at", {
       withTimezone: true,
