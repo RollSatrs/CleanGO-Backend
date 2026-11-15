@@ -174,6 +174,35 @@ export class AuthService {
     return this.toPublicUser(updated);
   }
 
+  // Telegram sends a contact message to the bot after WebApp.requestContact().
+  // Never trust a contact unless it belongs to the sender and is from a private chat.
+  async confirmTelegramContact(update: {
+    message?: {
+      from?: { id?: number };
+      chat?: { id?: number; type?: string };
+      contact?: { user_id?: number; phone_number?: string };
+    };
+  }) {
+    const message = update.message;
+    const sender = message?.from?.id;
+    const contact = message?.contact;
+    if (!sender || !contact || contact.user_id !== sender ||
+        message?.chat?.type !== "private" || message.chat.id !== sender) return;
+    const digits = contact.phone_number?.replace(/[^\\d]/g, "") ?? "";
+    const phone = `+${digits}`;
+    if (!/^\\+[1-9]\\d{7,14}$/.test(phone)) return;
+
+    const [owner] = await db.select().from(users)
+      .where(eq(users.telegramId, BigInt(sender))).limit(1);
+    if (!owner) return;
+    const [taken] = await db.select({ id: users.id }).from(users)
+      .where(eq(users.phone, phone)).limit(1);
+    if (taken && taken.id !== owner.id) return;
+
+    await db.update(users).set({ phone, phoneVerifiedAt: new Date() })
+      .where(eq(users.id, owner.id));
+  }
+
   // ==========================================
   // TELEGRAM AUTHENTICATION
   // ==========================================
