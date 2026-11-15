@@ -2,6 +2,8 @@
 import {
   Body,
   Controller,
+  Headers,
+  ForbiddenException,
   Get,
   Patch,
   Post,
@@ -54,6 +56,19 @@ export class AuthController {
   constructor(
     private readonly authService: AuthService,
   ) {}
+
+  @Post("telegram/contact-webhook")
+  async telegramContactWebhook(
+    @Headers("x-telegram-bot-api-secret-token") secret: string | undefined,
+    @Body() update: Record<string, unknown>,
+  ) {
+    const expected = process.env.TELEGRAM_WEBHOOK_SECRET;
+    if (!expected || !secret || secret !== expected) {
+      throw new ForbiddenException("Invalid webhook secret");
+    }
+    await this.authService.confirmTelegramContact(update);
+    return { ok: true };
+  }
 
   @Post("telegram")
   loginTelegram(
