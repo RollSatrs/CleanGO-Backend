@@ -60,7 +60,7 @@ export class AuthController {
   @Post("telegram/contact-webhook")
   async telegramContactWebhook(
     @Headers("x-telegram-bot-api-secret-token") secret: string | undefined,
-    @Body() update: Record<string, unknown>,
+    @Body() update: Parameters<AuthService["confirmTelegramContact"]>[0],
   ) {
     const expected = process.env.TELEGRAM_WEBHOOK_SECRET;
     if (!expected || !secret || secret !== expected) {
