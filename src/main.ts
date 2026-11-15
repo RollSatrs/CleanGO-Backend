@@ -7,10 +7,24 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
   app.enableCors({
-    origin: [
-      "http://localhost:3000",
-      "https://clean-go-frontend.vercel.app",
-    ],
+    origin: (origin, callback) => {
+      // Telegram Mini App can be hosted on a temporary HTTPS ngrok domain.
+      const allowedOrigins = new Set([
+        "http://localhost:3000",
+        "https://clean-go-frontend.vercel.app",
+        ...(process.env.FRONTEND_URL ?? "")
+          .split(",")
+          .map((value) => value.trim().replace(/\\/$/, ""))
+          .filter(Boolean),
+      ]);
+      const isDevTunnel = Boolean(origin) &&
+        /^https:\/\/[a-z0-9-]+\.ngrok(-free)?\.app$/.test(origin!);
+      if (!origin || allowedOrigins.has(origin) || isDevTunnel) {
+        callback(null, true);
+      } else {
+        callback(new Error("CORS origin not allowed"), false);
+      }
+    },
     credentials: true,
   });
 
