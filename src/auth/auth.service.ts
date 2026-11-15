@@ -190,7 +190,7 @@ export class AuthService {
         message?.chat?.type !== "private" || message.chat.id !== sender) return;
     const digits = contact.phone_number?.replace(/[^\d]/g, "") ?? "";
     const phone = `+${digits}`;
-    if (!/^\\+[1-9]\d{7,14}$/.test(phone)) return;
+    if (!/^\+[1-9]\d{7,14}$/.test(phone)) return;
 
     const [owner] = await db.select().from(users)
       .where(eq(users.telegramId, BigInt(sender))).limit(1);
