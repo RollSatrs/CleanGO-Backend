@@ -3,12 +3,14 @@ import {
   Body,
   Controller,
   Get,
+  Patch,
   Post,
   Req,
   UseGuards,
 } from "@nestjs/common";
 
 import {
+  IsIn,
   IsNotEmpty,
   IsString,
   Matches,
@@ -42,6 +44,11 @@ class VerifyPhoneDto extends PhoneCodeDto {
   code!: string;
 }
 
+class SelectRoleDto {
+  @IsIn(["client", "cleaner"])
+  role!: "client" | "cleaner";
+}
+
 @Controller("auth")
 export class AuthController {
   constructor(
@@ -73,6 +80,15 @@ export class AuthController {
     return this.authService.verifyPhoneCode(
       body.phone,
       body.code,
+    );
+  }
+
+  @UseGuards(AuthGuard)
+  @Patch("role")
+  selectRole(@Req() request: Request, @Body() body: SelectRoleDto) {
+    return this.authService.selectRole(
+      (request as AuthenticatedRequest).user.id,
+      body.role,
     );
   }
 
