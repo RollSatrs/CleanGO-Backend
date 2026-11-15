@@ -9,7 +9,7 @@ import {
 
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { SignJWT, jwtVerify } from "jose";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 
 import { db } from "../db/index.js";
 import { users } from "../db/schema.js";
@@ -186,7 +186,7 @@ export class AuthService {
         .insert(users)
         .values({
           phone: normalizedPhone,
-          role: "client",
+          role: "unselected",
         })
         .onConflictDoNothing({
           target: users.phone,
@@ -421,7 +421,7 @@ export class AuthService {
           telegramId,
           firstName: telegramUser.first_name,
           lastName: telegramUser.last_name,
-          role: "client",
+          role: "unselected",
         })
         .onConflictDoNothing({
           target: users.telegramId,
@@ -452,6 +452,31 @@ export class AuthService {
     // ==========================================
 
     return this.createSession(user);
+  }
+
+  // ==========================================
+  // SELECT ROLE
+  // ==========================================
+
+  async selectRole(userId: string, role: "client" | "cleaner") {
+    // Atomic conditional update prevents overwriting a previously selected role.
+    const [updated] = await db
+      .update(users)
+      .set({ role })
+      .where(and(eq(users.id, userId), eq(users.role, "unselected")))
+      .returning();
+
+    if (updated) return this.toPublicUser(updated);
+
+    const [existing] = await db
+      .select()
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
+
+    if (!existing) throw new UnauthorizedException("Пользователь не найден");
+    if (existing.role === role) return this.toPublicUser(existing);
+    throw new BadRequestException("Роль уже выбрана");
   }
 
   // ==========================================
