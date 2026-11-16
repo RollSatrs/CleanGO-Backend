@@ -7,6 +7,9 @@ import {
   timestamp,
   bigint,
   uniqueIndex,
+  index,
+  numeric,
+  boolean,
 } from "drizzle-orm/pg-core";
 
 // ==========================================
@@ -72,6 +75,16 @@ export const orders = pgTable("orders", {
   cleanerId: uuid("cleaner_id").references(() => users.id),
   acceptedAt: timestamp("accepted_at", { withTimezone: true }),
 
+  latitude: numeric("latitude", { precision: 9, scale: 6 }),
+  longitude: numeric("longitude", { precision: 9, scale: 6 }),
+  apartment: text("apartment"),
+  entrance: text("entrance"),
+  floor: text("floor"),
+  addressComment: text("address_comment"),
+  areaHint: text("area_hint"),
+  matchingStartedAt: timestamp("matching_started_at", { withTimezone: true }),
+  matchingRound: integer("matching_round").notNull().default(0),
+
   status: text("status")
     .notNull()
     .default("pending"),
@@ -82,3 +95,50 @@ export const orders = pgTable("orders", {
     .defaultNow()
     .notNull(),
 });
+
+
+// ==========================================
+// CLEANER PROFILES — opt-in availability and service area
+// ==========================================
+export const cleanerProfiles = pgTable("cleaner_profiles", {
+  userId: uuid("user_id").primaryKey().references(() => users.id),
+  isAvailable: boolean("is_available").notNull().default(false),
+  serviceRadiusKm: integer("service_radius_km"),
+  serviceArea: text("service_area"),
+  serviceTypes: text("service_types").array(),
+  latitude: numeric("latitude", { precision: 9, scale: 6 }),
+  longitude: numeric("longitude", { precision: 9, scale: 6 }),
+  lastLocationAt: timestamp("last_location_at", { withTimezone: true }),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+// ==========================================
+// ORDER OFFERS — multiple simultaneous private proposals
+// ==========================================
+export const orderOffers = pgTable("order_offers", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  orderId: uuid("order_id").notNull().references(() => orders.id),
+  cleanerId: uuid("cleaner_id").notNull().references(() => users.id),
+  batchNumber: integer("batch_number").notNull(),
+  status: text("status").notNull().default("offered"),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  respondedAt: timestamp("responded_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("order_offers_order_cleaner_uidx").on(table.orderId, table.cleanerId),
+  index("order_offers_cleaner_status_expiry_idx").on(table.cleanerId, table.status, table.expiresAt),
+  index("order_offers_order_status_idx").on(table.orderId, table.status),
+]);
+
+// ==========================================
+// ORDER EVENTS — audit log; payload must never expose private address
+// ==========================================
+export const orderEvents = pgTable("order_events", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  orderId: uuid("order_id").notNull().references(() => orders.id),
+  actorId: uuid("actor_id").references(() => users.id),
+  eventType: text("event_type").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  index("order_events_order_created_idx").on(table.orderId, table.createdAt),
+]);
