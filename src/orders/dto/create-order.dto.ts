@@ -7,6 +7,9 @@ import {
   IsPositive,
   IsIn,
   Matches,
+  IsOptional,
+  Min,
+  Max,
 } from "class-validator";
 
 export class CreateOrderDto {
@@ -21,6 +24,18 @@ export class CreateOrderDto {
   @IsInt()
   @IsPositive()
   area!: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(-90)
+  @Max(90)
+  latitude?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(-180)
+  @Max(180)
+  longitude?: number;
 
   @IsIn(["regular", "general", "renovation"])
   cleaningType!: "regular" | "general" | "renovation";
