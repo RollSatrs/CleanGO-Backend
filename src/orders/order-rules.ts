@@ -1,7 +1,15 @@
-/** MVP assignment policy: model A, cleaners opt in from a shared eligible job feed.
- * This constant documents the product decision; endpoints and matching are not implemented yet.
+/** Approved product decision: rank eligible nearby cleaners, offer each batch concurrently.
+ * First eligible atomic acceptance wins; others expire. Not implemented yet.
  */
-export const ORDER_ASSIGNMENT_MODEL = "open_feed" as const;
+export const ORDER_ASSIGNMENT_MODEL = "ranked_batch_offers" as const;
+
+/** Initial engineering defaults, NOT approved operational values. */
+export const MATCHING_PROPOSAL = {
+  initialBatchSize: 3,
+  offerTimeoutSeconds: 30,
+  candidateRadiusKm: 5,
+  maxCandidateRadiusKm: 15,
+} as const;
 
 export const ORDER_STATUSES = [
   "pending",
