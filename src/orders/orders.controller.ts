@@ -3,6 +3,8 @@ import {
   Body,
   Controller,
   Get,
+  Param,
+  Patch,
   Post,
   Req,
   UseGuards,
@@ -43,6 +45,15 @@ export class OrdersController {
       user.id,
       orderData,
     );
+  }
+
+  @Patch(":id/accept")
+  async accept(@Param("id") id: string, @Req() request: Request) {
+    const user = (request as AuthenticatedRequest).user;
+    if (user.role !== "cleaner" || !user.phoneVerifiedAt) {
+      throw new ForbiddenException("Для принятия заказа нужен подтверждённый профиль клинера");
+    }
+    return this.ordersService.accept(id, user.id);
   }
 
   @Get()
