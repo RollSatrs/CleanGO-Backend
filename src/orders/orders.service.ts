@@ -1,6 +1,6 @@
 
-import { Injectable } from "@nestjs/common";
-import { eq, desc } from "drizzle-orm";
+import { Injectable, ConflictException } from "@nestjs/common";
+import { eq, desc, and, isNull } from "drizzle-orm";
 
 import { db } from "../db/index.js";
 import { orders } from "../db/schema.js";
@@ -36,6 +36,16 @@ export class OrdersService {
       .returning();
 
     return order;
+  }
+
+  // Conditional UPDATE is atomic under PostgreSQL concurrency: first acceptance wins.
+  async accept(orderId: string, cleanerId: string) {
+    const [accepted] = await db.update(orders)
+      .set({ cleanerId, acceptedAt: new Date(), status: "accepted" })
+      .where(and(eq(orders.id, orderId), eq(orders.status, "pending"), isNull(orders.cleanerId)))
+      .returning();
+    if (!accepted) throw new ConflictException("Заказ уже принят или недоступен");
+    return accepted;
   }
 
   async findByUserId(userId: string) {
