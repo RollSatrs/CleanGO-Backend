@@ -1,3 +1,4 @@
+import { vi } from 'vitest';
 import { Test, TestingModule } from '@nestjs/testing';
 import { OrdersService } from './orders.service.js';
 import { PricingService } from '../pricing/pricing.service.js';
