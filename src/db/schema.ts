@@ -69,6 +69,9 @@ export const orders = pgTable("orders", {
 
   price: integer("price"),
 
+  cleanerId: uuid("cleaner_id").references(() => users.id),
+  acceptedAt: timestamp("accepted_at", { withTimezone: true }),
+
   status: text("status")
     .notNull()
     .default("pending"),
