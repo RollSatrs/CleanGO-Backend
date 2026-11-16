@@ -56,6 +56,15 @@ export class OrdersController {
     return this.ordersService.accept(id, user.id);
   }
 
+  @Patch(":id/decline")
+  async decline(@Param("id") id: string, @Req() request: Request) {
+    const user = (request as AuthenticatedRequest).user;
+    if (user.role !== "cleaner" || !user.phoneVerifiedAt) {
+      throw new ForbiddenException("Для отклонения предложения нужен подтверждённый профиль клинера");
+    }
+    return this.ordersService.decline(id, user.id);
+  }
+
   @Get()
   async findMine(
     @Req() request: Request,
