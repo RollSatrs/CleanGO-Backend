@@ -1,3 +1,8 @@
+/** MVP assignment policy: model A, cleaners opt in from a shared eligible job feed.
+ * This constant documents the product decision; endpoints and matching are not implemented yet.
+ */
+export const ORDER_ASSIGNMENT_MODEL = "open_feed" as const;
+
 export const ORDER_STATUSES = [
   "pending",
   "accepted",
