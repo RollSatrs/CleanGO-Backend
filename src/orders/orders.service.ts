@@ -45,6 +45,51 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
     private readonly pricingService: PricingService,
   ) {}
 
+  async getCleanerProfile(cleanerId: string) {
+    const [profile] = await db.select().from(cleanerProfiles)
+      .where(eq(cleanerProfiles.userId, cleanerId)).limit(1);
+    if (!profile) return {
+      isAvailable: false, serviceRadiusKm: 5,
+      serviceTypes: ["regular", "general", "renovation"],
+      hasLocation: false, lastLocationAt: null,
+    };
+    return {
+      isAvailable: profile.isAvailable,
+      serviceRadiusKm: profile.serviceRadiusKm ?? 5,
+      serviceTypes: profile.serviceTypes ?? [],
+      hasLocation: profile.latitude != null && profile.longitude != null,
+      lastLocationAt: profile.lastLocationAt,
+    };
+  }
+
+  async updateCleanerProfile(cleanerId: string, input: {
+    isAvailable: boolean;
+    serviceRadiusKm: number;
+    serviceTypes: string[];
+    latitude?: number;
+    longitude?: number;
+  }) {
+    const [existing] = await db.select({ userId: cleanerProfiles.userId })
+      .from(cleanerProfiles).where(eq(cleanerProfiles.userId, cleanerId)).limit(1);
+    const values = {
+      isAvailable: input.isAvailable,
+      serviceRadiusKm: input.serviceRadiusKm,
+      serviceTypes: input.serviceTypes,
+      latitude: input.latitude == null ? null : String(input.latitude),
+      longitude: input.longitude == null ? null : String(input.longitude),
+      lastLocationAt: input.latitude == null ? null : new Date(),
+      updatedAt: new Date(),
+    };
+    if (existing) {
+      await db.update(cleanerProfiles).set(values)
+        .where(eq(cleanerProfiles.userId, cleanerId));
+    } else {
+      await db.insert(cleanerProfiles).values({ userId: cleanerId, ...values })
+        .onConflictDoUpdate({ target: cleanerProfiles.userId, set: values });
+    }
+    return this.getCleanerProfile(cleanerId);
+  }
+
   async create(
     userId: string,
     orderData: CreateOrderDto,
