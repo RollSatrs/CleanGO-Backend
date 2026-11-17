@@ -47,6 +47,15 @@ export class OrdersController {
     );
   }
 
+  @Get("offers/mine")
+  async findMyOffers(@Req() request: Request) {
+    const user = (request as AuthenticatedRequest).user;
+    if (user.role !== "cleaner" || !user.phoneVerifiedAt) {
+      throw new ForbiddenException("Предложения доступны только подтверждённым клинерам");
+    }
+    return this.ordersService.findActiveOffers(user.id);
+  }
+
   @Patch(":id/accept")
   async accept(@Param("id") id: string, @Req() request: Request) {
     const user = (request as AuthenticatedRequest).user;
