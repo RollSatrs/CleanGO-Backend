@@ -1,6 +1,6 @@
 
-import { Injectable, ConflictException, BadRequestException, Logger } from "@nestjs/common";
-import { eq, desc, and, isNull, gt, sql } from "drizzle-orm";
+import { Injectable, ConflictException, BadRequestException, Logger, OnModuleInit, OnModuleDestroy } from "@nestjs/common";
+import { eq, desc, and, isNull, gt, lte, sql } from "drizzle-orm";
 
 import { db } from "../db/index.js";
 import { orders, orderOffers, orderEvents, cleanerProfiles, users } from "../db/schema.js";
@@ -10,7 +10,36 @@ import { PricingService } from "../pricing/pricing.service.js";
 import { CreateOrderDto } from "./dto/create-order.dto.js";
 
 @Injectable()
-export class OrdersService {
+export class OrdersService implements OnModuleInit, OnModuleDestroy {
+  private matchingTimer?: ReturnType<typeof setInterval>;
+  private matchingRunning = false;
+
+  onModuleInit() {
+    // Worker runs only in the backend process. PostgreSQL row locks prevent duplicate waves.
+    this.matchingTimer = setInterval(() => void this.processMatchingQueue(), 30_000);
+    this.matchingTimer.unref?.();
+  }
+
+  onModuleDestroy() {
+    if (this.matchingTimer) clearInterval(this.matchingTimer);
+  }
+
+  private async processMatchingQueue() {
+    if (this.matchingRunning) return;
+    this.matchingRunning = true;
+    try {
+      const pending = await db.select({ id: orders.id }).from(orders)
+        .where(and(eq(orders.status, "pending"), isNull(orders.cleanerId)))
+        .orderBy(orders.createdAt).limit(50);
+      for (const order of pending) {
+        try { await this.dispatchWave(order.id); }
+        catch (error) { this.logger.error(`Matching retry failed for ${order.id}`, error instanceof Error ? error.stack : String(error)); }
+      }
+    } catch (error) {
+      this.logger.error("Matching queue failed", error instanceof Error ? error.stack : String(error));
+    } finally { this.matchingRunning = false; }
+  }
+
   private readonly logger = new Logger(OrdersService.name);
   constructor(
     private readonly pricingService: PricingService,
@@ -45,7 +74,7 @@ export class OrdersService {
 
     // Matching is best-effort: a temporary matching failure must not lose a saved order.
     try {
-      await this.dispatchFirstWave(order.id);
+      await this.dispatchWave(order.id);
     } catch (error) {
       this.logger.error(`Matching failed for order ${order.id}`, error instanceof Error ? error.stack : String(error));
     }
@@ -112,10 +141,9 @@ export class OrdersService {
    * a service-area match. No address or apartment data is sent to candidates.
    * Later waves require a separate worker with locking and retry semantics.
    */
-  async dispatchFirstWave(orderId: string) {
+  async dispatchWave(orderId: string) {
     const [order] = await db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
-    if (!order || order.status !== "pending" || order.matchingRound !== 0 ||
-        order.latitude == null || order.longitude == null) {
+    if (!order || order.status !== "pending" || order.latitude == null || order.longitude == null) {
       return { offered: 0, reason: "not_eligible_for_geographic_matching" };
     }
 
@@ -173,32 +201,51 @@ export class OrdersService {
       };
     });
 
-    const selected = selectOfferBatch(rankCandidates(candidates), new Set<string>(), 3);
-    if (!selected.length) return { offered: 0, reason: "no_eligible_cleaners" };
+    const ranked = rankCandidates(candidates);
 
     return db.transaction(async tx => {
       // Serialize any competing dispatch attempts for the same order.
       const locked = await tx.execute(sql`SELECT id FROM orders WHERE id = ${orderId} FOR UPDATE`);
       if (!locked.rows.length) return { offered: 0, reason: "order_missing" };
       const [current] = await tx.select().from(orders).where(eq(orders.id, orderId));
-      if (!current || current.status !== "pending" || current.matchingRound !== 0) {
-        return { offered: 0, reason: "already_dispatched" };
+      if (!current || current.status !== "pending" || current.cleanerId) {
+        return { offered: 0, reason: "order_no_longer_pending" };
       }
-      const existing = await tx.select({ id: orderOffers.id })
-        .from(orderOffers).where(eq(orderOffers.orderId, orderId)).limit(1);
-      if (existing.length) return { offered: 0, reason: "already_offered" };
+      const now = new Date();
+      const existing = await tx.select({
+        cleanerId: orderOffers.cleanerId,
+        status: orderOffers.status,
+        expiresAt: orderOffers.expiresAt,
+      }).from(orderOffers).where(eq(orderOffers.orderId, orderId));
 
-      const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+      // Wait until all active proposals are answered or expire.
+      if (existing.some(offer => offer.status === "offered" && offer.expiresAt > now)) {
+        return { offered: 0, reason: "active_offers" };
+      }
+      await tx.update(orderOffers).set({ status: "expired", respondedAt: now })
+        .where(and(eq(orderOffers.orderId, orderId),
+          eq(orderOffers.status, "offered"), lte(orderOffers.expiresAt, now)));
+
+      // Never re-offer to a cleaner who declined or previously timed out.
+      const previouslyOffered = new Set(existing.map(offer => offer.cleanerId));
+      const selected = selectOfferBatch(ranked, previouslyOffered, 3);
+      if (!selected.length) return { offered: 0, reason: "no_more_eligible_cleaners" };
+
+      const round = current.matchingRound + 1;
+      // Engineering TTL until product parameters are approved.
+      const expiresAt = new Date(now.getTime() + 5 * 60 * 1000);
       await tx.insert(orderOffers).values(selected.map(candidate => ({
-        orderId, cleanerId: candidate.cleanerId, batchNumber: 1,
+        orderId, cleanerId: candidate.cleanerId, batchNumber: round,
         status: "offered", expiresAt,
       })));
-      await tx.update(orders).set({ matchingRound: 1, matchingStartedAt: now })
-        .where(eq(orders.id, orderId));
+      await tx.update(orders).set({
+        matchingRound: round,
+        matchingStartedAt: current.matchingStartedAt ?? now,
+      }).where(eq(orders.id, orderId));
       await tx.insert(orderEvents).values({
-        orderId, eventType: "matching_first_wave_created",
+        orderId, eventType: "matching_wave_created",
       });
-      return { offered: selected.length, expiresAt };
+      return { offered: selected.length, round, expiresAt };
     });
   }
 
