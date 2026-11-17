@@ -202,6 +202,35 @@ export class OrdersService {
     });
   }
 
+  /**
+   * Private active proposals for one authenticated cleaner.
+   * Deliberately select only non-sensitive order fields: never return
+   * full address, exact coordinates, apartment, or client identity.
+   */
+  async findActiveOffers(cleanerId: string) {
+    const now = new Date();
+    return db.select({
+      offerId: orderOffers.id,
+      orderId: orderOffers.orderId,
+      expiresAt: orderOffers.expiresAt,
+      cleaningType: orders.cleaningType,
+      area: orders.area,
+      price: orders.price,
+      approximateArea: orders.areaHint,
+      createdAt: orders.createdAt,
+    })
+      .from(orderOffers)
+      .innerJoin(orders, eq(orderOffers.orderId, orders.id))
+      .where(and(
+        eq(orderOffers.cleanerId, cleanerId),
+        eq(orderOffers.status, "offered"),
+        gt(orderOffers.expiresAt, now),
+        eq(orders.status, "pending"),
+        isNull(orders.cleanerId),
+      ))
+      .orderBy(desc(orders.createdAt));
+  }
+
   /** A cleaner may decline only their own active private offer. */
   async decline(orderId: string, cleanerId: string) {
     return db.transaction(async (tx) => {
