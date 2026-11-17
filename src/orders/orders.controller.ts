@@ -9,9 +9,11 @@ import {
   Req,
   UseGuards,
   ForbiddenException,
+  BadRequestException,
 } from "@nestjs/common";
 
 import type { Request } from "express";
+import { IsArray, IsBoolean, IsIn, IsInt, IsNumber, IsOptional, Max, Min, ArrayNotEmpty, ArrayUnique } from "class-validator";
 
 import { OrdersService } from "./orders.service.js";
 import { CreateOrderDto } from "./dto/create-order.dto.js";
@@ -21,12 +23,64 @@ import {
   type AuthenticatedRequest,
 } from "../auth/auth.guard.js";
 
+class CleanerProfileDto {
+  @IsBoolean()
+  isAvailable!: boolean;
+
+  @IsInt()
+  @Min(1)
+  @Max(30)
+  serviceRadiusKm!: number;
+
+  @IsArray()
+  @ArrayNotEmpty()
+  @ArrayUnique()
+  @IsIn(["regular", "general", "renovation"], { each: true })
+  serviceTypes!: string[];
+
+  @IsOptional()
+  @IsNumber()
+  @Min(-90)
+  @Max(90)
+  latitude?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(-180)
+  @Max(180)
+  longitude?: number;
+}
+
 @Controller("orders")
 @UseGuards(AuthGuard)
 export class OrdersController {
   constructor(
     private readonly ordersService: OrdersService,
   ) {}
+
+  @Get("cleaner/profile")
+  async getCleanerProfile(@Req() request: Request) {
+    const user = (request as AuthenticatedRequest).user;
+    if (user.role !== "cleaner" || !user.phoneVerifiedAt) {
+      throw new ForbiddenException("Требуется подтверждённый профиль клинера");
+    }
+    return this.ordersService.getCleanerProfile(user.id);
+  }
+
+  @Patch("cleaner/profile")
+  async updateCleanerProfile(@Req() request: Request, @Body() body: CleanerProfileDto) {
+    const user = (request as AuthenticatedRequest).user;
+    if (user.role !== "cleaner" || !user.phoneVerifiedAt) {
+      throw new ForbiddenException("Требуется подтверждённый профиль клинера");
+    }
+    if ((body.latitude == null) !== (body.longitude == null)) {
+      throw new BadRequestException("Координаты нужно передавать вместе");
+    }
+    if (body.isAvailable && (body.latitude == null || body.longitude == null)) {
+      throw new BadRequestException("Для выхода на линию требуется актуальная геопозиция");
+    }
+    return this.ordersService.updateCleanerProfile(user.id, body);
+  }
 
   @Post()
   async create(
