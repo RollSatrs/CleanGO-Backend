@@ -75,9 +75,11 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
       isAvailable: input.isAvailable,
       serviceRadiusKm: input.serviceRadiusKm,
       serviceTypes: input.serviceTypes,
-      latitude: input.latitude == null ? null : String(input.latitude),
-      longitude: input.longitude == null ? null : String(input.longitude),
-      lastLocationAt: input.latitude == null ? null : new Date(),
+      ...(input.latitude == null ? {} : {
+        latitude: String(input.latitude),
+        longitude: String(input.longitude),
+        lastLocationAt: new Date(),
+      }),
       updatedAt: new Date(),
     };
     if (existing) {
