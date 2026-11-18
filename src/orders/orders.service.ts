@@ -49,7 +49,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
     const [profile] = await db.select().from(cleanerProfiles)
       .where(eq(cleanerProfiles.userId, cleanerId)).limit(1);
     if (!profile) return {
-      isAvailable: false, serviceRadiusKm: 5,
+      isAvailable: false, effectiveAvailable: false, locationNeedsRefresh: false, serviceRadiusKm: 5,
       serviceTypes: ["regular", "general", "renovation"],
       hasLocation: false, lastLocationAt: null,
     };
