@@ -5,6 +5,7 @@ import { eq, desc, and, isNull, gt, lte, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { orders, orderOffers, orderEvents, cleanerProfiles, users } from "../db/schema.js";
 import { rankCandidates, selectOfferBatch, type MatchingCandidate } from "./matching-engine.js";
+import { locationIsFresh } from "./cleaner-availability.js";
 
 import { PricingService } from "../pricing/pricing.service.js";
 import { CreateOrderDto } from "./dto/create-order.dto.js";
@@ -54,9 +55,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
       hasLocation: false, lastLocationAt: null,
     };
     const hasLocation = profile.latitude != null && profile.longitude != null;
-    const locationFresh = hasLocation && profile.lastLocationAt != null &&
-      profile.lastLocationAt.getTime() <= Date.now() &&
-      Date.now() - profile.lastLocationAt.getTime() <= 30 * 60 * 1000;
+    const locationFresh = locationIsFresh(profile.latitude, profile.longitude, profile.lastLocationAt);
     return {
       isAvailable: profile.isAvailable,
       effectiveAvailable: profile.isAvailable && locationFresh,
@@ -85,9 +84,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
       lastLocationAt: cleanerProfiles.lastLocationAt,
     }).from(cleanerProfiles).where(eq(cleanerProfiles.userId, cleanerId)).limit(1);
     const now = Date.now();
-    const savedLocationFresh = existing?.latitude != null && existing.longitude != null &&
-      existing.lastLocationAt != null && existing.lastLocationAt.getTime() <= now &&
-      now - existing.lastLocationAt.getTime() <= 30 * 60 * 1000;
+    const savedLocationFresh = locationIsFresh(existing?.latitude, existing?.longitude, existing?.lastLocationAt, new Date(now));
     if (input.isAvailable && input.latitude == null && !savedLocationFresh) {
       throw new BadRequestException("Для выхода на линию обновите геопозицию. Услуги и радиус можно сохранять отдельно.");
     }
@@ -238,14 +235,11 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
       .where(and(eq(orders.status, "accepted"), sql`${orders.cleanerId} IS NOT NULL`));
     const busyIds = new Set(busy.map(row => row.cleanerId).filter((id): id is string => id !== null));
     const now = new Date();
-    const maxLocationAgeMs = 30 * 60 * 1000;
 
     const candidates: MatchingCandidate[] = profiles.map(profile => {
       const lat = profile.latitude == null ? null : Number(profile.latitude);
       const lon = profile.longitude == null ? null : Number(profile.longitude);
-      const locationFresh = profile.lastLocationAt != null &&
-        profile.lastLocationAt.getTime() <= now.getTime() &&
-        now.getTime() - profile.lastLocationAt.getTime() <= maxLocationAgeMs;
+      const locationFresh = locationIsFresh(profile.latitude, profile.longitude, profile.lastLocationAt, now);
       let servesArea = false;
       if (lat !== null && lon !== null && Number.isFinite(lat) && Number.isFinite(lon) &&
           Math.abs(lat) <= 90 && Math.abs(lon) <= 180 &&
