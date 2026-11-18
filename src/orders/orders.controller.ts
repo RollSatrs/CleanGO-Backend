@@ -39,6 +39,10 @@ class CleanerProfileDto {
   serviceTypes!: string[];
 
   @IsOptional()
+  @IsIn([1, 2, 4])
+  availabilityHours?: 1 | 2 | 4;
+
+  @IsOptional()
   @IsNumber()
   @Min(-90)
   @Max(90)
@@ -75,6 +79,9 @@ export class OrdersController {
     }
     if ((body.latitude == null) !== (body.longitude == null)) {
       throw new BadRequestException("Координаты нужно передавать вместе");
+    }
+    if (body.availabilityHours != null && ![1, 2, 4].includes(body.availabilityHours)) {
+      throw new BadRequestException("Доступность можно включить на 1, 2 или 4 часа");
     }
     return this.ordersService.updateCleanerProfile(user.id, body);
   }
