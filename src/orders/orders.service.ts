@@ -5,7 +5,7 @@ import { eq, desc, and, isNull, gt, lte, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { orders, orderOffers, orderEvents, cleanerProfiles, users } from "../db/schema.js";
 import { rankCandidates, selectOfferBatch, type MatchingCandidate } from "./matching-engine.js";
-import { locationIsFresh } from "./cleaner-availability.js";
+import { locationIsFresh, availabilityStatus, availabilityExpiresAt, type AvailabilityHours } from "./cleaner-availability.js";
 
 import { PricingService } from "../pricing/pricing.service.js";
 import { CreateOrderDto } from "./dto/create-order.dto.js";
@@ -52,14 +52,14 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
     if (!profile) return {
       isAvailable: false, effectiveAvailable: false, locationNeedsRefresh: false, serviceRadiusKm: 5,
       serviceTypes: ["regular", "general", "renovation"],
-      hasLocation: false, lastLocationAt: null,
+      hasLocation: false, lastLocationAt: null, availableUntil: null, timeRemainingSeconds: 0, availabilityExpired: false,
     };
     const hasLocation = profile.latitude != null && profile.longitude != null;
-    const locationFresh = locationIsFresh(profile.latitude, profile.longitude, profile.lastLocationAt);
+    const availability = availabilityStatus({ optedIn: profile.isAvailable, expiresAt: profile.availableUntil, latitude: profile.latitude, longitude: profile.longitude, lastLocationAt: profile.lastLocationAt });
     return {
       isAvailable: profile.isAvailable,
-      effectiveAvailable: profile.isAvailable && locationFresh,
-      locationNeedsRefresh: profile.isAvailable && !locationFresh,
+      ...availability,
+      availableUntil: profile.availableUntil,
       serviceRadiusKm: profile.serviceRadiusKm ?? 5,
       serviceTypes: profile.serviceTypes ?? [],
       hasLocation,
@@ -73,6 +73,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
     serviceTypes: string[];
     latitude?: number;
     longitude?: number;
+    availabilityHours?: AvailabilityHours;
   }) {
     if ((input.latitude == null) !== (input.longitude == null)) {
       throw new BadRequestException("Координаты нужно передавать вместе");
@@ -82,14 +83,22 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
       latitude: cleanerProfiles.latitude,
       longitude: cleanerProfiles.longitude,
       lastLocationAt: cleanerProfiles.lastLocationAt,
+      isAvailable: cleanerProfiles.isAvailable,
+      availableUntil: cleanerProfiles.availableUntil,
     }).from(cleanerProfiles).where(eq(cleanerProfiles.userId, cleanerId)).limit(1);
     const now = Date.now();
     const savedLocationFresh = locationIsFresh(existing?.latitude, existing?.longitude, existing?.lastLocationAt, new Date(now));
     if (input.isAvailable && input.latitude == null && !savedLocationFresh) {
       throw new BadRequestException("Для выхода на линию обновите геопозицию. Услуги и радиус можно сохранять отдельно.");
     }
+    const sessionHours = input.availabilityHours;
+    const availableUntil = !input.isAvailable ? null : sessionHours != null
+      ? availabilityExpiresAt(sessionHours)
+      : existing?.isAvailable && existing.availableUntil && existing.availableUntil.getTime() > now
+        ? existing.availableUntil : availabilityExpiresAt(1);
     const values = {
       isAvailable: input.isAvailable,
+      availableUntil,
       serviceRadiusKm: input.serviceRadiusKm,
       serviceTypes: input.serviceTypes,
       ...(input.latitude == null ? {} : {
@@ -221,6 +230,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
     const profiles = await db.select({
       cleanerId: cleanerProfiles.userId,
       available: cleanerProfiles.isAvailable,
+      availableUntil: cleanerProfiles.availableUntil,
       serviceTypes: cleanerProfiles.serviceTypes,
       radius: cleanerProfiles.serviceRadiusKm,
       latitude: cleanerProfiles.latitude,
@@ -255,7 +265,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
       return {
         cleanerId: profile.cleanerId,
         verified: profile.role === "cleaner" && profile.phoneVerifiedAt != null,
-        available: profile.available,
+        available: availabilityStatus({ optedIn: profile.available, expiresAt: profile.availableUntil, latitude: profile.latitude, longitude: profile.longitude, lastLocationAt: profile.lastLocationAt }, now).effectiveAvailable,
         hasActiveOrder: busyIds.has(profile.cleanerId),
         supportsCleaningType: profile.serviceTypes?.includes(order.cleaningType) === true,
         servesArea,
