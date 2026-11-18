@@ -242,7 +242,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
 
     const busy = await db.select({ cleanerId: orders.cleanerId })
       .from(orders)
-      .where(and(eq(orders.status, "accepted"), sql`${orders.cleanerId} IS NOT NULL`));
+      .where(and(sql`${orders.status} IN ('accepted', 'in_progress')`, sql`${orders.cleanerId} IS NOT NULL`));
     const busyIds = new Set(busy.map(row => row.cleanerId).filter((id): id is string => id !== null));
     const now = new Date();
 
@@ -318,6 +318,36 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
       });
       return { offered: selected.length, round, expiresAt };
     });
+  }
+
+  async startCleaning(orderId: string, cleanerId: string) {
+    return db.transaction(async tx => {
+      const [updated] = await tx.update(orders)
+        .set({ status: "in_progress" })
+        .where(and(eq(orders.id, orderId), eq(orders.cleanerId, cleanerId), eq(orders.status, "accepted")))
+        .returning();
+      if (!updated) throw new ConflictException("Заказ не назначен вам или уже начат");
+      await tx.insert(orderEvents).values({ orderId, actorId: cleanerId, eventType: "cleaning_started" });
+      return updated;
+    });
+  }
+
+  async completeCleaning(orderId: string, cleanerId: string) {
+    return db.transaction(async tx => {
+      const [updated] = await tx.update(orders)
+        .set({ status: "completed" })
+        .where(and(eq(orders.id, orderId), eq(orders.cleanerId, cleanerId), eq(orders.status, "in_progress")))
+        .returning();
+      if (!updated) throw new ConflictException("Завершить можно только свою выполняемую уборку");
+      await tx.insert(orderEvents).values({ orderId, actorId: cleanerId, eventType: "cleaning_completed" });
+      return updated;
+    });
+  }
+
+  async findCleanerJobs(cleanerId: string) {
+    return db.select().from(orders)
+      .where(and(eq(orders.cleanerId, cleanerId), sql`${orders.status} IN ('accepted', 'in_progress')`))
+      .orderBy(desc(orders.createdAt));
   }
 
   /**
