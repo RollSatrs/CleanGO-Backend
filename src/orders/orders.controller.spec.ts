@@ -14,6 +14,9 @@ describe('OrdersController', () => {
     decline: vi.fn(),
     findActiveOffers: vi.fn(),
     findByUserId: vi.fn(),
+    findCleanerJobs: vi.fn(),
+    startCleaning: vi.fn(),
+    completeCleaning: vi.fn(),
   };
 
   beforeEach(async () => {
@@ -49,6 +52,32 @@ describe('OrdersController', () => {
       await expect(controller.findMyOffers({ user } as never)).rejects.toBeInstanceOf(ForbiddenException);
     }
     expect(ordersServiceMock.findActiveOffers).not.toHaveBeenCalled();
+  });
+
+  it('allows a verified cleaner to manage only their own assigned jobs through scoped service calls', async () => {
+    const request = { user: { id: 'cleaner-1', role: 'cleaner', phoneVerifiedAt: new Date() } };
+    ordersServiceMock.findCleanerJobs.mockResolvedValue([{ id: 'job-1' }]);
+    ordersServiceMock.startCleaning.mockResolvedValue({ id: 'job-1', status: 'in_progress' });
+    ordersServiceMock.completeCleaning.mockResolvedValue({ id: 'job-1', status: 'completed' });
+    await expect(controller.findCleanerJobs(request as never)).resolves.toEqual([{ id: 'job-1' }]);
+    await expect(controller.startCleaning('job-1', request as never)).resolves.toMatchObject({ status: 'in_progress' });
+    await expect(controller.completeCleaning('job-1', request as never)).resolves.toMatchObject({ status: 'completed' });
+    expect(ordersServiceMock.findCleanerJobs).toHaveBeenCalledWith('cleaner-1');
+    expect(ordersServiceMock.startCleaning).toHaveBeenCalledWith('job-1', 'cleaner-1');
+    expect(ordersServiceMock.completeCleaning).toHaveBeenCalledWith('job-1', 'cleaner-1');
+  });
+
+  it('rejects job transitions for clients and unverified cleaners', async () => {
+    for (const user of [
+      { id: 'client-1', role: 'client', phoneVerifiedAt: new Date() },
+      { id: 'cleaner-2', role: 'cleaner', phoneVerifiedAt: null },
+    ]) {
+      await expect(controller.findCleanerJobs({ user } as never)).rejects.toBeInstanceOf(ForbiddenException);
+      await expect(controller.startCleaning('job-1', { user } as never)).rejects.toBeInstanceOf(ForbiddenException);
+      await expect(controller.completeCleaning('job-1', { user } as never)).rejects.toBeInstanceOf(ForbiddenException);
+    }
+    expect(ordersServiceMock.startCleaning).not.toHaveBeenCalled();
+    expect(ordersServiceMock.completeCleaning).not.toHaveBeenCalled();
   });
 
   it('denies accepting and declining offers to clients', async () => {
