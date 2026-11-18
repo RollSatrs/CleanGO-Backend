@@ -141,6 +141,33 @@ export class OrdersController {
     return this.ordersService.findActiveOffers(user.id);
   }
 
+  @Get("cleaner/jobs")
+  async findCleanerJobs(@Req() request: Request) {
+    const user = (request as AuthenticatedRequest).user;
+    if (user.role !== "cleaner" || !user.phoneVerifiedAt) {
+      throw new ForbiddenException("Доступно только подтверждённым клинерам");
+    }
+    return this.ordersService.findCleanerJobs(user.id);
+  }
+
+  @Patch(":id/start")
+  async startJob(@Param("id") id: string, @Req() request: Request) {
+    const user = (request as AuthenticatedRequest).user;
+    if (user.role !== "cleaner" || !user.phoneVerifiedAt) {
+      throw new ForbiddenException("Доступно только подтверждённым клинерам");
+    }
+    return this.ordersService.transitionCleanerJob(id, user.id, "start");
+  }
+
+  @Patch(":id/complete")
+  async completeJob(@Param("id") id: string, @Req() request: Request) {
+    const user = (request as AuthenticatedRequest).user;
+    if (user.role !== "cleaner" || !user.phoneVerifiedAt) {
+      throw new ForbiddenException("Доступно только подтверждённым клинерам");
+    }
+    return this.ordersService.transitionCleanerJob(id, user.id, "complete");
+  }
+
   @Patch(":id/accept")
   async accept(@Param("id") id: string, @Req() request: Request) {
     const user = (request as AuthenticatedRequest).user;
