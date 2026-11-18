@@ -76,9 +76,6 @@ export class OrdersController {
     if ((body.latitude == null) !== (body.longitude == null)) {
       throw new BadRequestException("Координаты нужно передавать вместе");
     }
-    if (body.isAvailable && (body.latitude == null || body.longitude == null)) {
-      throw new BadRequestException("Для выхода на линию требуется актуальная геопозиция");
-    }
     return this.ordersService.updateCleanerProfile(user.id, body);
   }
 
