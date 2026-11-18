@@ -57,6 +57,13 @@
       "when": 1794831914466,
       "tag": "0007_complete_sway",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1795009544953,
+      "tag": "0008_wealthy_redwing",
+      "breakpoints": true
     }
   ]
 }

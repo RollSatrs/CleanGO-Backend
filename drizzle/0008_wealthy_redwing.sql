@@ -1,0 +1,1 @@
+ALTER TABLE "cleaner_profiles" ADD COLUMN "available_until" timestamp with time zone;
