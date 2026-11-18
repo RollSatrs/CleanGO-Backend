@@ -53,11 +53,17 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
       serviceTypes: ["regular", "general", "renovation"],
       hasLocation: false, lastLocationAt: null,
     };
+    const hasLocation = profile.latitude != null && profile.longitude != null;
+    const locationFresh = hasLocation && profile.lastLocationAt != null &&
+      profile.lastLocationAt.getTime() <= Date.now() &&
+      Date.now() - profile.lastLocationAt.getTime() <= 30 * 60 * 1000;
     return {
       isAvailable: profile.isAvailable,
+      effectiveAvailable: profile.isAvailable && locationFresh,
+      locationNeedsRefresh: profile.isAvailable && !locationFresh,
       serviceRadiusKm: profile.serviceRadiusKm ?? 5,
       serviceTypes: profile.serviceTypes ?? [],
-      hasLocation: profile.latitude != null && profile.longitude != null,
+      hasLocation,
       lastLocationAt: profile.lastLocationAt,
     };
   }
@@ -69,8 +75,22 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
     latitude?: number;
     longitude?: number;
   }) {
-    const [existing] = await db.select({ userId: cleanerProfiles.userId })
-      .from(cleanerProfiles).where(eq(cleanerProfiles.userId, cleanerId)).limit(1);
+    if ((input.latitude == null) !== (input.longitude == null)) {
+      throw new BadRequestException("Координаты нужно передавать вместе");
+    }
+    const [existing] = await db.select({
+      userId: cleanerProfiles.userId,
+      latitude: cleanerProfiles.latitude,
+      longitude: cleanerProfiles.longitude,
+      lastLocationAt: cleanerProfiles.lastLocationAt,
+    }).from(cleanerProfiles).where(eq(cleanerProfiles.userId, cleanerId)).limit(1);
+    const now = Date.now();
+    const savedLocationFresh = existing?.latitude != null && existing.longitude != null &&
+      existing.lastLocationAt != null && existing.lastLocationAt.getTime() <= now &&
+      now - existing.lastLocationAt.getTime() <= 30 * 60 * 1000;
+    if (input.isAvailable && input.latitude == null && !savedLocationFresh) {
+      throw new BadRequestException("Для выхода на линию обновите геопозицию. Услуги и радиус можно сохранять отдельно.");
+    }
     const values = {
       isAvailable: input.isAvailable,
       serviceRadiusKm: input.serviceRadiusKm,
