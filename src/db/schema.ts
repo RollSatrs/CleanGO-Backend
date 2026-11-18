@@ -103,6 +103,7 @@ export const orders = pgTable("orders", {
 export const cleanerProfiles = pgTable("cleaner_profiles", {
   userId: uuid("user_id").primaryKey().references(() => users.id),
   isAvailable: boolean("is_available").notNull().default(false),
+  availableUntil: timestamp("available_until", { withTimezone: true }),
   serviceRadiusKm: integer("service_radius_km"),
   serviceArea: text("service_area"),
   serviceTypes: text("service_types").array(),
