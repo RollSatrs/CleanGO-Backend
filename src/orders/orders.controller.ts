@@ -105,6 +105,33 @@ export class OrdersController {
     );
   }
 
+  @Get("cleaner/jobs")
+  async findCleanerJobs(@Req() request: Request) {
+    const user = (request as AuthenticatedRequest).user;
+    if (user.role !== "cleaner" || !user.phoneVerifiedAt) {
+      throw new ForbiddenException("Требуется подтверждённый профиль клинера");
+    }
+    return this.ordersService.findCleanerJobs(user.id);
+  }
+
+  @Patch(":id/start")
+  async startCleaning(@Param("id") id: string, @Req() request: Request) {
+    const user = (request as AuthenticatedRequest).user;
+    if (user.role !== "cleaner" || !user.phoneVerifiedAt) {
+      throw new ForbiddenException("Требуется подтверждённый профиль клинера");
+    }
+    return this.ordersService.startCleaning(id, user.id);
+  }
+
+  @Patch(":id/complete")
+  async completeCleaning(@Param("id") id: string, @Req() request: Request) {
+    const user = (request as AuthenticatedRequest).user;
+    if (user.role !== "cleaner" || !user.phoneVerifiedAt) {
+      throw new ForbiddenException("Требуется подтверждённый профиль клинера");
+    }
+    return this.ordersService.completeCleaning(id, user.id);
+  }
+
   @Get("offers/mine")
   async findMyOffers(@Req() request: Request) {
     const user = (request as AuthenticatedRequest).user;
