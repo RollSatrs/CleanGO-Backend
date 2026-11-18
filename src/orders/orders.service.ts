@@ -14,6 +14,8 @@ import { CreateOrderDto } from "./dto/create-order.dto.js";
 export class OrdersService implements OnModuleInit, OnModuleDestroy {
   private matchingTimer?: ReturnType<typeof setInterval>;
   private matchingRunning = false;
+  // Maximum total search window, independent of individual five-minute offers.
+  private readonly matchingMaxAgeMs = 15 * 60_000;
 
   onModuleInit() {
     // Worker runs only in the backend process. PostgreSQL row locks prevent duplicate waves.
@@ -283,12 +285,25 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
         return { offered: 0, reason: "order_no_longer_pending" };
       }
       const now = new Date();
+      // End the search only after the total window has elapsed and no offer is still active.
+      // This also safely resolves historical pending orders without touching accepted jobs.
       const existing = await tx.select({
         cleanerId: orderOffers.cleanerId,
         status: orderOffers.status,
         expiresAt: orderOffers.expiresAt,
       }).from(orderOffers).where(eq(orderOffers.orderId, orderId));
 
+      const searchStarted = current.matchingStartedAt ?? current.createdAt;
+      const searchExpired = now.getTime() - searchStarted.getTime() >= this.matchingMaxAgeMs;
+      const hasActiveOffer = existing.some(offer => offer.status === "offered" && offer.expiresAt > now);
+      if (searchExpired && !hasActiveOffer) {
+        await tx.update(orderOffers).set({ status: "expired", respondedAt: now })
+          .where(and(eq(orderOffers.orderId, orderId), eq(orderOffers.status, "offered")));
+        await tx.update(orders).set({ status: "unassigned" })
+          .where(and(eq(orders.id, orderId), eq(orders.status, "pending"), isNull(orders.cleanerId)));
+        await tx.insert(orderEvents).values({ orderId, eventType: "matching_timeout" });
+        return { offered: 0, reason: "matching_timeout" };
+      }
       // Wait until all active proposals are answered or expire.
       if (existing.some(offer => offer.status === "offered" && offer.expiresAt > now)) {
         return { offered: 0, reason: "active_offers" };
