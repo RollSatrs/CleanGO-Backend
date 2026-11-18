@@ -379,34 +379,6 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
       .orderBy(desc(orders.createdAt));
   }
 
-  /** Only assigned cleaners may see exact addresses after acceptance. */
-  async findCleanerJobs(cleanerId: string) {
-    return db.select({
-      id: orders.id, status: orders.status, cleaningType: orders.cleaningType,
-      area: orders.area, price: orders.price, address: orders.address,
-      createdAt: orders.createdAt,
-    }).from(orders).where(and(
-      eq(orders.cleanerId, cleanerId),
-      sql`${orders.status} IN ('accepted', 'in_progress')`,
-    )).orderBy(desc(orders.createdAt));
-  }
-
-  async transitionCleanerJob(orderId: string, cleanerId: string, action: "start" | "complete") {
-    const from = action === "start" ? "accepted" : "in_progress";
-    const to = action === "start" ? "in_progress" : "completed";
-    return db.transaction(async tx => {
-      const [updated] = await tx.update(orders).set({ status: to })
-        .where(and(eq(orders.id, orderId), eq(orders.cleanerId, cleanerId), eq(orders.status, from)))
-        .returning();
-      if (!updated) throw new ConflictException("Заказ недоступен или его статус изменился");
-      await tx.insert(orderEvents).values({
-        orderId, actorId: cleanerId,
-        eventType: action === "start" ? "cleaning_started" : "cleaning_completed",
-      });
-      return updated;
-    });
-  }
-
   /** A cleaner may decline only their own active private offer. */
   async decline(orderId: string, cleanerId: string) {
     return db.transaction(async (tx) => {
