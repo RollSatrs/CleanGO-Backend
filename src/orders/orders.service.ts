@@ -44,6 +44,23 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
   }
 
   private readonly logger = new Logger(OrdersService.name);
+  /** Optional Telegram notifications; never block order state changes. */
+  private async notifyTelegram(userId:string, message:string) {
+    const token=process.env.TELEGRAM_BOT_TOKEN;
+    if(!token)return;
+    try {
+      const [recipient]=await db.select({telegramId:users.telegramId}).from(users).where(eq(users.id,userId)).limit(1);
+      if(!recipient?.telegramId)return;
+      const response=await fetch(`https://api.telegram.org/bot${token}/sendMessage`,{
+        method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({chat_id:recipient.telegramId.toString(),text:message}),
+        signal:AbortSignal.timeout(5000),
+      });
+      if(!response.ok)this.logger.warn(`Telegram notification failed (HTTP ${response.status})`);
+    }catch(error){this.logger.warn("Telegram notification unavailable: "+String(error));}
+  }
+
+
   constructor(
     private readonly pricingService: PricingService,
   ) {}
@@ -209,6 +226,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
         eventType: "order_accepted",
       });
 
+      if(accepted.userId) void this.notifyTelegram(accepted.userId,"CleanGo: клинер принял ваш заказ. Откройте приложение, чтобы посмотреть детали.");
       return accepted;
     });
   }
@@ -369,6 +387,10 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
         .where(and(eq(orders.id,orderId),eq(orders.cleanerId,cleanerId),eq(orders.status,from))).returning();
       if(!updated) throw new ConflictException("Заказ не в нужном статусе или не назначен вам");
       await tx.insert(orderEvents).values({orderId,actorId:cleanerId,eventType});
+      if(updated.userId) {
+        const messages:Record<string,string>={en_route:"Клинер выехал к вам.",arrived:"Клинер сообщил о прибытии."};
+        void this.notifyTelegram(updated.userId,"CleanGo: "+(messages[to]??"Статус заказа обновлён.")+" Откройте приложение для подробностей.");
+      }
       return updated;
     });
   }
@@ -381,6 +403,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
         .returning();
       if (!updated) throw new ConflictException("Заказ не назначен вам или уже начат");
       await tx.insert(orderEvents).values({ orderId, actorId: cleanerId, eventType: "cleaning_started" });
+      if(updated.userId)void this.notifyTelegram(updated.userId,"CleanGo: уборка началась.");
       return updated;
     });
   }
@@ -393,6 +416,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
         .returning();
       if (!updated) throw new ConflictException("Завершить можно только свою выполняемую уборку");
       await tx.insert(orderEvents).values({ orderId, actorId: cleanerId, eventType: "cleaning_completed" });
+      if(updated.userId)void this.notifyTelegram(updated.userId,"CleanGo: уборка завершена.");
       return updated;
     });
   }
