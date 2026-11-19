@@ -261,10 +261,7 @@ export class AuthService {
     // ==========================================
 
     // Проверка через токен бота:
-    // исключаем только hash.
-    //
-    // signature остаётся в строке проверки,
-    // если Telegram передал это поле.
+    // Telegram HMAC excludes hash and signature; signature is used for Ed25519 third-party validation.
 
     const entries = [...params.entries()];
 
@@ -274,7 +271,7 @@ export class AuthService {
     );
 
     const dataCheckString = sortedEntries
-      .filter(([key]) => key !== "hash")
+      .filter(([key]) => key !== "hash" && key !== "signature")
       .map(([key, value]) => `${key}=${value}`)
       .join("\n");
 
@@ -350,8 +347,7 @@ export class AuthService {
       });
     }
 
-    // Только официальная HMAC-проверка
-    // разрешает авторизацию.
+    // Only the official Telegram HMAC check authorizes login.
 
     if (!canonicalMatch) {
       throw new UnauthorizedException(
