@@ -338,6 +338,23 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
+  /** Per-order, explicit opt-in; no tracking when not en route. */
+  async updateTripLocation(orderId: string, cleanerId: string, latitude: number | null, longitude: number | null) {
+    const [order] = await db.select({status:orders.status}).from(orders)
+      .where(and(eq(orders.id,orderId),eq(orders.cleanerId,cleanerId))).limit(1);
+    if(!order || order.status!=="en_route") throw new ConflictException("Геопозиция доступна только во время поездки");
+    if(latitude===null && longitude===null) {
+      await db.insert(orderEvents).values({orderId,actorId:cleanerId,eventType:"trip_location_off"});
+      return {sharing:false};
+    }
+    if(latitude===null || longitude===null || !Number.isFinite(latitude) || !Number.isFinite(longitude) || Math.abs(latitude)>90 || Math.abs(longitude)>180) throw new BadRequestException("Некорректные координаты");
+    await db.transaction(async tx=>{
+      await tx.update(cleanerProfiles).set({latitude:String(latitude),longitude:String(longitude),lastLocationAt:new Date()}).where(eq(cleanerProfiles.userId,cleanerId));
+      await tx.insert(orderEvents).values({orderId,actorId:cleanerId,eventType:"trip_location_on"});
+    });
+    return {sharing:true};
+  }
+
   async markEnRoute(orderId: string, cleanerId: string) {
     return this.transitionAssigned(orderId, cleanerId, "accepted", "en_route", "cleaner_en_route");
   }
@@ -397,7 +414,20 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
         .from(users).where(eq(users.id, order.cleanerId)).limit(1);
       if (user) cleaner = { name: [user.firstName, user.lastName].filter(Boolean).join(" ") || "Исполнитель CleanGo", phone: user.phone };
     }
-    return { status: order.status, sent, declined, awaiting, cleaner };
+    let tripLocation: {latitude:number;longitude:number}|null=null;
+    if(order.status==="en_route" && order.cleanerId) {
+      const [event]=await db.select({eventType:orderEvents.eventType}).from(orderEvents)
+        .where(and(eq(orderEvents.orderId,orderId),inArray(orderEvents.eventType,["trip_location_on","trip_location_off"])))
+        .orderBy(desc(orderEvents.createdAt),desc(orderEvents.id)).limit(1);
+      if(event?.eventType==="trip_location_on") {
+        const [profile]=await db.select({latitude:cleanerProfiles.latitude,longitude:cleanerProfiles.longitude,lastLocationAt:cleanerProfiles.lastLocationAt})
+          .from(cleanerProfiles).where(eq(cleanerProfiles.userId,order.cleanerId)).limit(1);
+        if(profile?.latitude!=null && profile.longitude!=null && profile.lastLocationAt && Date.now()-profile.lastLocationAt.getTime()<30_000) {
+          tripLocation={latitude:Number(profile.latitude),longitude:Number(profile.longitude)};
+        }
+      }
+    }
+    return { status: order.status, sent, declined, awaiting, cleaner, tripLocation };
   }
 
   async findCleanerJobs(cleanerId: string) {
