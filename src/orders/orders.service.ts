@@ -386,7 +386,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
     return db.select({
       id: orders.id, status: orders.status, cleaningType: orders.cleaningType,
       area: orders.area, price: orders.price, address: orders.address,
-      createdAt: orders.createdAt, clientFirstName: users.firstName,
+      createdAt: orders.createdAt, latitude: orders.latitude, longitude: orders.longitude, clientFirstName: users.firstName,
       clientLastName: users.lastName, clientPhone: users.phone,
     }).from(orders).leftJoin(users, eq(orders.userId, users.id))
       .where(and(eq(orders.cleanerId, cleanerId), sql`${orders.status} IN ('accepted', 'in_progress')`))
