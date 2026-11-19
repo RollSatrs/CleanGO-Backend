@@ -407,7 +407,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
       createdAt: orders.createdAt, latitude: orders.latitude, longitude: orders.longitude, clientFirstName: users.firstName,
       clientLastName: users.lastName, clientPhone: users.phone,
     }).from(orders).leftJoin(users, eq(orders.userId, users.id))
-      .where(and(eq(orders.cleanerId, cleanerId), sql`${orders.status} IN ('accepted', 'in_progress')`))
+      .where(and(eq(orders.cleanerId, cleanerId), sql`${orders.status} IN ('accepted', 'en_route', 'arrived', 'in_progress')`))
       .orderBy(desc(orders.createdAt));
   }
 
