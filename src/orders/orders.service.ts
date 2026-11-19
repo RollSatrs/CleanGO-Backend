@@ -484,8 +484,8 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
     const [totalRow] = await db.select({ total: count() }).from(orders).where(condition);
     const items = await db.select().from(orders).where(condition)
       .orderBy(desc(orders.createdAt), desc(orders.id))
-      .limit(20).offset((page - 1) * 20);
-    return { items, page, pageSize: 20, total: totalRow?.total ?? 0, hasMore: page * 20 < (totalRow?.total ?? 0) };
+      .limit(10).offset((page - 1) * 10);
+    return { items, page, pageSize: 10, total: totalRow?.total ?? 0, hasMore: page * 10 < (totalRow?.total ?? 0) };
   }
 
   async findByUserId(userId: string) {
