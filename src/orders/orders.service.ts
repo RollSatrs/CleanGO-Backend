@@ -451,6 +451,31 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
+  async cancelByClient(orderId: string, clientId: string) {
+    return db.transaction(async tx => {
+      const now = new Date();
+      const [cancelled] = await tx.update(orders)
+        .set({ status: "cancelled" })
+        .where(and(
+          eq(orders.id, orderId),
+          eq(orders.userId, clientId),
+          eq(orders.status, "pending"),
+          isNull(orders.cleanerId),
+        ))
+        .returning();
+      if (!cancelled) throw new ConflictException("Отменить можно только свой заказ до принятия клинером");
+
+      await tx.update(orderOffers)
+        .set({ status: "revoked", respondedAt: now })
+        .where(and(eq(orderOffers.orderId, orderId), eq(orderOffers.status, "offered")));
+
+      await tx.insert(orderEvents).values({
+        orderId, actorId: clientId, eventType: "order_cancelled",
+      });
+      return cancelled;
+    });
+  }
+
   async findByUserId(userId: string) {
     return db
       .select()
