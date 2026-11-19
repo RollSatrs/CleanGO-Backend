@@ -488,6 +488,12 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
     return { items, page, pageSize: 5, total: totalRow?.total ?? 0, hasMore: page * 5 < (totalRow?.total ?? 0) };
   }
 
+  async findOneForClient(orderId: string, clientId: string) {
+    const [order] = await db.select().from(orders)
+      .where(and(eq(orders.id, orderId), eq(orders.userId, clientId))).limit(1);
+    return order ?? null;
+  }
+
   async findByUserId(userId: string) {
     return db
       .select()
