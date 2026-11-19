@@ -297,7 +297,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
 
     const ranked = rankCandidates(candidates);
 
-    return db.transaction(async tx => {
+    const result=await db.transaction(async tx => {
       // Serialize any competing dispatch attempts for the same order.
       const locked = await tx.execute(sql`SELECT id FROM orders WHERE id = ${orderId} FOR UPDATE`);
       if (!locked.rows.length) return { offered: 0, reason: "order_missing" };
@@ -352,8 +352,12 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
       await tx.insert(orderEvents).values({
         orderId, eventType: "matching_wave_created",
       });
-      return { offered: selected.length, round, expiresAt };
+      return { offered: selected.length, round, expiresAt, cleanerIds:selected.map(candidate=>candidate.cleanerId) };
     });
+    if("cleanerIds" in result && result.cleanerIds) for(const cleanerId of result.cleanerIds) {
+      void this.notifyTelegram(cleanerId,"CleanGo: вам поступило новое предложение на уборку. Откройте Mini App, чтобы принять заказ.");
+    }
+    return result;
   }
 
   /** Per-order, explicit opt-in; no tracking when not en route. */
