@@ -117,6 +117,9 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
       await db.insert(cleanerProfiles).values({ userId: cleanerId, ...values })
         .onConflictDoUpdate({ target: cleanerProfiles.userId, set: values });
     }
+    // A newly refreshed/available cleaner can be considered promptly for pending orders.
+    // The queue retains its locking and eligibility checks.
+    if (input.isAvailable) void this.processMatchingQueue();
     return this.getCleanerProfile(cleanerId);
   }
 
@@ -318,8 +321,8 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
       if (!selected.length) return { offered: 0, reason: "no_more_eligible_cleaners" };
 
       const round = current.matchingRound + 1;
-      // Engineering TTL until product parameters are approved.
-      const expiresAt = new Date(now.getTime() + 5 * 60 * 1000);
+      // Short pilot offer window: next matching wave can proceed after 90 seconds.
+      const expiresAt = new Date(now.getTime() + 90 * 1000);
       await tx.insert(orderOffers).values(selected.map(candidate => ({
         orderId, cleanerId: candidate.cleanerId, batchNumber: round,
         status: "offered", expiresAt,
