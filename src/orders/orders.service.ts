@@ -1,6 +1,6 @@
 
 import { Injectable, ConflictException, BadRequestException, Logger, OnModuleInit, OnModuleDestroy } from "@nestjs/common";
-import { eq, desc, and, isNull, gt, lte, sql, count } from "drizzle-orm";
+import { eq, desc, and, isNull, gt, lte, sql } from "drizzle-orm";
 
 import { db } from "../db/index.js";
 import { orders, orderOffers, orderEvents, cleanerProfiles, users } from "../db/schema.js";
