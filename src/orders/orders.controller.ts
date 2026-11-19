@@ -167,6 +167,15 @@ export class OrdersController {
     return this.ordersService.findCleanerJobs(user.id);
   }
 
+  @Patch(":id/trip-location")
+  async updateTripLocation(@Param("id") id:string,@Req() request:Request,@Body() body:{latitude?:number|null;longitude?:number|null}) {
+    const user=(request as AuthenticatedRequest).user;
+    if(user.role!=="cleaner" || !user.phoneVerifiedAt) throw new ForbiddenException("Требуется подтверждённый клинер");
+    if(body.latitude!==null && body.latitude!==undefined && typeof body.latitude!=="number") throw new BadRequestException("Некорректная широта");
+    if(body.longitude!==null && body.longitude!==undefined && typeof body.longitude!=="number") throw new BadRequestException("Некорректная долгота");
+    return this.ordersService.updateTripLocation(id,user.id,body.latitude??null,body.longitude??null);
+  }
+
   @Patch(":id/en-route")
   async markEnRoute(@Param("id") id: string, @Req() request: Request) {
     const user = (request as AuthenticatedRequest).user;
