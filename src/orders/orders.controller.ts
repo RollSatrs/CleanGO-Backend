@@ -191,7 +191,7 @@ export class OrdersController {
     if (user.role !== "client" || !user.phoneVerifiedAt) {
       throw new ForbiddenException("История доступна подтверждённому клиенту");
     }
-    if (!["active", "archive"].includes(section) || !/^[1-9]\\d*$/.test(pageValue)) {
+    if (!["active", "archive"].includes(section) || !/^[1-9]\d*$/.test(pageValue)) {
       throw new BadRequestException("Некорректные параметры истории");
     }
     const page = Number(pageValue);
