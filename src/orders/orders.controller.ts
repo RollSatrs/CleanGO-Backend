@@ -116,6 +116,17 @@ export class OrdersController {
     return this.ordersService.cancelByClient(id, user.id);
   }
 
+  @Get(":id")
+  async findOneForClient(@Param("id") id: string, @Req() request: Request) {
+    const user = (request as AuthenticatedRequest).user;
+    if (user.role !== "client" || !user.phoneVerifiedAt) {
+      throw new ForbiddenException("Заказ доступен подтверждённому клиенту");
+    }
+    const order = await this.ordersService.findOneForClient(id, user.id);
+    if (!order) throw new NotFoundException("Заказ не найден");
+    return order;
+  }
+
   @Get(":id/progress")
   async matchingProgress(@Param("id") id: string, @Req() request: Request) {
     const user = (request as AuthenticatedRequest).user;
