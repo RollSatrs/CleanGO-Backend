@@ -247,7 +247,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
 
     const busy = await db.select({ cleanerId: orders.cleanerId })
       .from(orders)
-      .where(and(sql`${orders.status} IN ('accepted', 'in_progress')`, sql`${orders.cleanerId} IS NOT NULL`));
+      .where(and(sql`${orders.status} IN ('accepted', 'en_route', 'arrived', 'in_progress')`, sql`${orders.cleanerId} IS NOT NULL`));
     const busyIds = new Set(busy.map(row => row.cleanerId).filter((id): id is string => id !== null));
     const now = new Date();
 
@@ -338,11 +338,29 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
+  async markEnRoute(orderId: string, cleanerId: string) {
+    return this.transitionAssigned(orderId, cleanerId, "accepted", "en_route", "cleaner_en_route");
+  }
+
+  async markArrived(orderId: string, cleanerId: string) {
+    return this.transitionAssigned(orderId, cleanerId, "en_route", "arrived", "cleaner_arrived");
+  }
+
+  private async transitionAssigned(orderId: string, cleanerId: string, from: string, to: string, eventType: string) {
+    return db.transaction(async tx => {
+      const [updated] = await tx.update(orders).set({status:to})
+        .where(and(eq(orders.id,orderId),eq(orders.cleanerId,cleanerId),eq(orders.status,from))).returning();
+      if(!updated) throw new ConflictException("Заказ не в нужном статусе или не назначен вам");
+      await tx.insert(orderEvents).values({orderId,actorId:cleanerId,eventType});
+      return updated;
+    });
+  }
+
   async startCleaning(orderId: string, cleanerId: string) {
     return db.transaction(async tx => {
       const [updated] = await tx.update(orders)
         .set({ status: "in_progress" })
-        .where(and(eq(orders.id, orderId), eq(orders.cleanerId, cleanerId), eq(orders.status, "accepted")))
+        .where(and(eq(orders.id, orderId), eq(orders.cleanerId, cleanerId), eq(orders.status, "arrived")))
         .returning();
       if (!updated) throw new ConflictException("Заказ не назначен вам или уже начат");
       await tx.insert(orderEvents).values({ orderId, actorId: cleanerId, eventType: "cleaning_started" });
@@ -374,7 +392,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
     const declined = offers.filter(offer => offer.status === "declined").length;
     const awaiting = offers.filter(offer => offer.status === "offered" && offer.expiresAt > now).length;
     let cleaner: { name: string; phone: string | null } | null = null;
-    if (order.cleanerId && ["accepted", "in_progress", "completed"].includes(order.status)) {
+    if (order.cleanerId && ["accepted", "en_route", "arrived", "in_progress", "completed"].includes(order.status)) {
       const [user] = await db.select({ firstName: users.firstName, lastName: users.lastName, phone: users.phone })
         .from(users).where(eq(users.id, order.cleanerId)).limit(1);
       if (user) cleaner = { name: [user.firstName, user.lastName].filter(Boolean).join(" ") || "Исполнитель CleanGo", phone: user.phone };
