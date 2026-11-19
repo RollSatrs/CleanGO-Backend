@@ -1,6 +1,6 @@
 
 import { Injectable, ConflictException, BadRequestException, Logger, OnModuleInit, OnModuleDestroy } from "@nestjs/common";
-import { eq, desc, and, isNull, gt, lte, sql } from "drizzle-orm";
+import { eq, desc, and, isNull, gt, lte, sql, inArray, count } from "drizzle-orm";
 
 import { db } from "../db/index.js";
 import { orders, orderOffers, orderEvents, cleanerProfiles, users } from "../db/schema.js";
@@ -474,6 +474,18 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
       });
       return cancelled;
     });
+  }
+
+  async findMinePage(userId: string, section: "active" | "archive", page: number) {
+    const terminal = ["completed", "cancelled", "unassigned", "expired", "failed", "no_cleaner"];
+    const condition = and(eq(orders.userId, userId), section === "archive"
+      ? inArray(orders.status, terminal)
+      : sql`${orders.status} NOT IN ('completed', 'cancelled', 'unassigned', 'expired', 'failed', 'no_cleaner')`);
+    const [totalRow] = await db.select({ total: count() }).from(orders).where(condition);
+    const items = await db.select().from(orders).where(condition)
+      .orderBy(desc(orders.createdAt), desc(orders.id))
+      .limit(20).offset((page - 1) * 20);
+    return { items, page, pageSize: 20, total: totalRow?.total ?? 0, hasMore: page * 20 < (totalRow?.total ?? 0) };
   }
 
   async findByUserId(userId: string) {
