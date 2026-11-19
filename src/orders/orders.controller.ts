@@ -106,6 +106,15 @@ export class OrdersController {
     );
   }
 
+  @Patch(":id/cancel")
+  async cancelByClient(@Param("id") id: string, @Req() request: Request) {
+    const user = (request as AuthenticatedRequest).user;
+    if (user.role !== "client" || !user.phoneVerifiedAt) {
+      throw new ForbiddenException("Отмена доступна только подтверждённому клиенту");
+    }
+    return this.ordersService.cancelByClient(id, user.id);
+  }
+
   @Get(":id/progress")
   async matchingProgress(@Param("id") id: string, @Req() request: Request) {
     const user = (request as AuthenticatedRequest).user;
