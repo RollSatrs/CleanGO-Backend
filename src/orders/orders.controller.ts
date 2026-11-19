@@ -116,6 +116,26 @@ export class OrdersController {
     return this.ordersService.cancelByClient(id, user.id);
   }
 
+  @Get("history")
+  async history(
+    @Req() request: Request,
+    @Query("section") section = "active",
+    @Query("page") pageValue = "1",
+  ) {
+    const user = (request as AuthenticatedRequest).user;
+    if (user.role !== "client" || !user.phoneVerifiedAt) {
+      throw new ForbiddenException("История доступна подтверждённому клиенту");
+    }
+    if (!["active", "archive"].includes(section) || !/^[1-9]\d*$/.test(pageValue)) {
+      throw new BadRequestException("Некорректные параметры истории");
+    }
+    const page = Number(pageValue);
+    if (!Number.isSafeInteger(page) || page > 100000) {
+      throw new BadRequestException("Некорректный номер страницы");
+    }
+    return this.ordersService.findMinePage(user.id, section as "active" | "archive", page);
+  }
+
   @Get(":id")
   async findOneForClient(@Param("id") id: string, @Req() request: Request) {
     const user = (request as AuthenticatedRequest).user;
@@ -192,25 +212,6 @@ export class OrdersController {
     return this.ordersService.decline(id, user.id);
   }
 
-  @Get("history")
-  async history(
-    @Req() request: Request,
-    @Query("section") section = "active",
-    @Query("page") pageValue = "1",
-  ) {
-    const user = (request as AuthenticatedRequest).user;
-    if (user.role !== "client" || !user.phoneVerifiedAt) {
-      throw new ForbiddenException("История доступна подтверждённому клиенту");
-    }
-    if (!["active", "archive"].includes(section) || !/^[1-9]\d*$/.test(pageValue)) {
-      throw new BadRequestException("Некорректные параметры истории");
-    }
-    const page = Number(pageValue);
-    if (!Number.isSafeInteger(page) || page > 100000) {
-      throw new BadRequestException("Некорректный номер страницы");
-    }
-    return this.ordersService.findMinePage(user.id, section as "active" | "archive", page);
-  }
 
   @Get()
   async findMine(
