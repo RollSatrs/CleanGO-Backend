@@ -1,6 +1,6 @@
 
 import { Injectable, ConflictException, BadRequestException, Logger, OnModuleInit, OnModuleDestroy } from "@nestjs/common";
-import { eq, desc, and, isNull, gt, lte, sql } from "drizzle-orm";
+import { eq, desc, and, isNull, gt, lte, sql, count } from "drizzle-orm";
 
 import { db } from "../db/index.js";
 import { orders, orderOffers, orderEvents, cleanerProfiles, users } from "../db/schema.js";
@@ -359,8 +359,33 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
+  /** Client-visible aggregate counts, never identities or coordinates of candidate cleaners. */
+  async getMatchingProgress(orderId: string, clientId: string) {
+    const [order] = await db.select({ id: orders.id, status: orders.status, cleanerId: orders.cleanerId })
+      .from(orders).where(and(eq(orders.id, orderId), eq(orders.userId, clientId))).limit(1);
+    if (!order) return null;
+    const now = new Date();
+    const offers = await db.select({ status: orderOffers.status, expiresAt: orderOffers.expiresAt })
+      .from(orderOffers).where(eq(orderOffers.orderId, orderId));
+    const sent = offers.length;
+    const declined = offers.filter(offer => offer.status === "declined").length;
+    const awaiting = offers.filter(offer => offer.status === "offered" && offer.expiresAt > now).length;
+    let cleaner: { name: string; phone: string | null } | null = null;
+    if (order.cleanerId && ["accepted", "in_progress", "completed"].includes(order.status)) {
+      const [user] = await db.select({ firstName: users.firstName, lastName: users.lastName, phone: users.phone })
+        .from(users).where(eq(users.id, order.cleanerId)).limit(1);
+      if (user) cleaner = { name: [user.firstName, user.lastName].filter(Boolean).join(" ") || "Исполнитель CleanGo", phone: user.phone };
+    }
+    return { status: order.status, sent, declined, awaiting, cleaner };
+  }
+
   async findCleanerJobs(cleanerId: string) {
-    return db.select().from(orders)
+    return db.select({
+      id: orders.id, status: orders.status, cleaningType: orders.cleaningType,
+      area: orders.area, price: orders.price, address: orders.address,
+      createdAt: orders.createdAt, clientFirstName: users.firstName,
+      clientLastName: users.lastName, clientPhone: users.phone,
+    }).from(orders).leftJoin(users, eq(orders.userId, users.id))
       .where(and(eq(orders.cleanerId, cleanerId), sql`${orders.status} IN ('accepted', 'in_progress')`))
       .orderBy(desc(orders.createdAt));
   }
