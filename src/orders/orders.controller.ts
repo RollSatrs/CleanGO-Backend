@@ -9,6 +9,7 @@ import {
   Req,
   UseGuards,
   ForbiddenException,
+  NotFoundException,
   BadRequestException,
 } from "@nestjs/common";
 
@@ -103,6 +104,17 @@ export class OrdersController {
       user.id,
       orderData,
     );
+  }
+
+  @Get(":id/progress")
+  async matchingProgress(@Param("id") id: string, @Req() request: Request) {
+    const user = (request as AuthenticatedRequest).user;
+    if (user.role !== "client" || !user.phoneVerifiedAt) {
+      throw new ForbiddenException("Требуется подтверждённый профиль клиента");
+    }
+    const progress = await this.ordersService.getMatchingProgress(id, user.id);
+    if (!progress) throw new NotFoundException("Заказ не найден");
+    return progress;
   }
 
   @Get("cleaner/jobs")
