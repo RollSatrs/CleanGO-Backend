@@ -19,7 +19,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
 
   onModuleInit() {
     // Worker runs only in the backend process. PostgreSQL row locks prevent duplicate waves.
-    this.matchingTimer = setInterval(() => void this.processMatchingQueue(), 30_000);
+    this.matchingTimer = setInterval(() => void this.processMatchingQueue(), 5_000);
     this.matchingTimer.unref?.();
   }
 
