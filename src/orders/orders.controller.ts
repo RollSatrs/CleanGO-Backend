@@ -167,6 +167,20 @@ export class OrdersController {
     return this.ordersService.findCleanerJobs(user.id);
   }
 
+  @Patch(":id/en-route")
+  async markEnRoute(@Param("id") id: string, @Req() request: Request) {
+    const user = (request as AuthenticatedRequest).user;
+    if (user.role !== "cleaner" || !user.phoneVerifiedAt) throw new ForbiddenException("Требуется подтверждённый клинер");
+    return this.ordersService.markEnRoute(id, user.id);
+  }
+
+  @Patch(":id/arrived")
+  async markArrived(@Param("id") id: string, @Req() request: Request) {
+    const user = (request as AuthenticatedRequest).user;
+    if (user.role !== "cleaner" || !user.phoneVerifiedAt) throw new ForbiddenException("Требуется подтверждённый клинер");
+    return this.ordersService.markArrived(id, user.id);
+  }
+
   @Patch(":id/start")
   async startCleaning(@Param("id") id: string, @Req() request: Request) {
     const user = (request as AuthenticatedRequest).user;
