@@ -94,7 +94,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
       detail,
       "",
       "Нажмите кнопку ниже, чтобы открыть приложение.",
-    ].join("\\n");
+    ].join("\n");
   }
 
 
