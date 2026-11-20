@@ -44,20 +44,57 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
   }
 
   private readonly logger = new Logger(OrdersService.name);
-  /** Optional Telegram notifications; never block order state changes. */
-  private async notifyTelegram(userId:string, message:string) {
-    const token=process.env.TELEGRAM_BOT_TOKEN;
-    if(!token)return;
+  /** Best-effort Telegram notifications. No private address in offer previews. */
+  private async notifyTelegram(userId: string, message: string) {
+    const token = process.env.TELEGRAM_BOT_TOKEN;
+    if (!token) return;
     try {
-      const [recipient]=await db.select({telegramId:users.telegramId}).from(users).where(eq(users.id,userId)).limit(1);
-      if(!recipient?.telegramId)return;
-      const response=await fetch(`https://api.telegram.org/bot${token}/sendMessage`,{
-        method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({chat_id:recipient.telegramId.toString(),text:message}),
-        signal:AbortSignal.timeout(5000),
+      const [recipient] = await db.select({ telegramId: users.telegramId })
+        .from(users).where(eq(users.id, userId)).limit(1);
+      if (!recipient?.telegramId) return;
+      const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: recipient.telegramId.toString(),
+          text: message,
+          parse_mode: "HTML",
+          reply_markup: {
+            inline_keyboard: [[{
+              text: "📱 Открыть CleanGo",
+              url: "https://t.me/cleaninggoo_bot",
+            }]],
+          },
+        }),
+        signal: AbortSignal.timeout(5000),
       });
-      if(!response.ok)this.logger.warn(`Telegram notification failed (HTTP ${response.status})`);
-    }catch(error){this.logger.warn("Telegram notification unavailable: "+String(error));}
+      if (!response.ok) this.logger.warn(`Telegram notification failed (HTTP ${response.status})`);
+    } catch (error) {
+      this.logger.warn("Telegram notification unavailable: " + String(error));
+    }
+  }
+
+  private readonly cleaningLabels: Record<string, string> = {
+    regular: "Поддерживающая",
+    general: "Генеральная",
+    renovation: "После ремонта",
+  };
+
+  private formatOrderNotice(title: string, order: { id: string; cleaningType: string; area: number; price: number | null }, detail: string) {
+    const kind = this.cleaningLabels[order.cleaningType] ?? "Уборка";
+    const price = order.price == null ? "Уточняется" : `${order.price.toLocaleString("ru-RU")} ₸`;
+    return [
+      title,
+      "",
+      `🧹 <b>Услуга:</b> ${kind}`,
+      `📐 <b>Площадь:</b> ${order.area} м²`,
+      `💳 <b>Стоимость:</b> ${price}`,
+      `🆔 <b>Заказ:</b> ${order.id.slice(0, 8)}`,
+      "",
+      detail,
+      "",
+      "Нажмите кнопку ниже, чтобы открыть приложение.",
+    ].join("\\n");
   }
 
 
@@ -226,7 +263,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
         eventType: "order_accepted",
       });
 
-      if(accepted.userId) void this.notifyTelegram(accepted.userId,"CleanGo: клинер принял ваш заказ. Откройте приложение, чтобы посмотреть детали.");
+      if(accepted.userId) void this.notifyTelegram(accepted.userId,this.formatOrderNotice("✅ <b>Клинер найден!</b>",accepted,"Исполнитель принял заказ. Следите за его статусом в приложении."));
       return accepted;
     });
   }
@@ -355,7 +392,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
       return { offered: selected.length, round, expiresAt, cleanerIds:selected.map(candidate=>candidate.cleanerId) };
     });
     if("cleanerIds" in result && result.cleanerIds) for(const cleanerId of result.cleanerIds) {
-      void this.notifyTelegram(cleanerId,"CleanGo: вам поступило новое предложение на уборку. Откройте Mini App, чтобы принять заказ.");
+      void this.notifyTelegram(cleanerId,this.formatOrderNotice("🔔 <b>Новый заказ для вас</b>",order,"⏳ Предложение действует 90 секунд. Заказ одновременно доступен нескольким клинерам — первым принимает тот, кто успеет."));
     }
     return result;
   }
@@ -393,7 +430,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
       await tx.insert(orderEvents).values({orderId,actorId:cleanerId,eventType});
       if(updated.userId) {
         const messages:Record<string,string>={en_route:"Клинер выехал к вам.",arrived:"Клинер сообщил о прибытии."};
-        void this.notifyTelegram(updated.userId,"CleanGo: "+(messages[to]??"Статус заказа обновлён.")+" Откройте приложение для подробностей.");
+        void this.notifyTelegram(updated.userId,this.formatOrderNotice(to === "en_route" ? "🚗 <b>Клинер выехал</b>" : "📍 <b>Клинер прибыл</b>",updated,messages[to]??"Статус заказа обновлён."));
       }
       return updated;
     });
@@ -407,7 +444,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
         .returning();
       if (!updated) throw new ConflictException("Заказ не назначен вам или уже начат");
       await tx.insert(orderEvents).values({ orderId, actorId: cleanerId, eventType: "cleaning_started" });
-      if(updated.userId)void this.notifyTelegram(updated.userId,"CleanGo: уборка началась.");
+      if(updated.userId)void this.notifyTelegram(updated.userId,this.formatOrderNotice("🧽 <b>Уборка началась</b>",updated,"Исполнитель приступил к работе."));
       return updated;
     });
   }
@@ -420,7 +457,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
         .returning();
       if (!updated) throw new ConflictException("Завершить можно только свою выполняемую уборку");
       await tx.insert(orderEvents).values({ orderId, actorId: cleanerId, eventType: "cleaning_completed" });
-      if(updated.userId)void this.notifyTelegram(updated.userId,"CleanGo: уборка завершена.");
+      if(updated.userId)void this.notifyTelegram(updated.userId,this.formatOrderNotice("✨ <b>Уборка завершена</b>",updated,"Заказ отмечен как выполненный."));
       return updated;
     });
   }
