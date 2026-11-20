@@ -62,7 +62,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
           reply_markup: {
             inline_keyboard: [[{
               text: "📱 Открыть CleanGo",
-              url: "https://t.me/cleaninggoo_bot",
+              web_app: { url: "https://clean-go-frontend.vercel.app" },
             }]],
           },
         }),
