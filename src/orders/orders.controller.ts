@@ -64,6 +64,12 @@ export class OrdersController {
     private readonly ordersService: OrdersService,
   ) {}
 
+  @Get("notifications")
+  async notifications(@Req() request: Request) {
+    const user = (request as AuthenticatedRequest).user;
+    return this.ordersService.getNotifications(user.id, user.role);
+  }
+
   @Get("cleaner/profile")
   async getCleanerProfile(@Req() request: Request) {
     const user = (request as AuthenticatedRequest).user;
