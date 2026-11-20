@@ -102,6 +102,37 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
     private readonly pricingService: PricingService,
   ) {}
 
+  /** Recent activity for the authenticated user; never expose another user's orders. */
+  async getNotifications(userId: string, role: string) {
+    if (role !== "client" && role !== "cleaner") return [];
+    if (role === "client") {
+      const rows = await db.select({
+        id: orderEvents.id, orderId: orderEvents.orderId,
+        type: orderEvents.eventType, createdAt: orderEvents.createdAt,
+      }).from(orderEvents).innerJoin(orders, eq(orderEvents.orderId, orders.id))
+        .where(eq(orders.userId, userId)).orderBy(desc(orderEvents.createdAt)).limit(80);
+      return rows.filter(row => [
+        "order_accepted", "cleaner_en_route", "cleaner_arrived",
+        "cleaning_started", "cleaning_completed", "matching_timeout", "order_cancelled",
+      ].includes(row.type));
+    }
+    const events = await db.select({
+      id: orderEvents.id, orderId: orderEvents.orderId,
+      type: orderEvents.eventType, createdAt: orderEvents.createdAt,
+    }).from(orderEvents).innerJoin(orders, eq(orderEvents.orderId, orders.id))
+      .where(eq(orders.cleanerId, userId)).orderBy(desc(orderEvents.createdAt)).limit(60);
+    const offers = await db.select({
+      id: orderOffers.id, orderId: orderOffers.orderId,
+      createdAt: orderOffers.createdAt,
+    }).from(orderOffers).where(eq(orderOffers.cleanerId, userId))
+      .orderBy(desc(orderOffers.createdAt)).limit(40);
+    return [...events.filter(row => [
+      "order_accepted", "cleaner_en_route", "cleaner_arrived",
+      "cleaning_started", "cleaning_completed", "order_cancelled",
+    ].includes(row.type)), ...offers.map(offer => ({ ...offer, type: "new_offer" }))]
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()).slice(0, 80);
+  }
+
   async getCleanerProfile(cleanerId: string) {
     const [profile] = await db.select().from(cleanerProfiles)
       .where(eq(cleanerProfiles.userId, cleanerId)).limit(1);
