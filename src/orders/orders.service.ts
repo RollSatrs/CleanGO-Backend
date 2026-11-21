@@ -34,6 +34,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
       const pending = await db.select({ id: orders.id }).from(orders)
         .where(and(eq(orders.status, "pending"), isNull(orders.cleanerId)))
         .orderBy(orders.createdAt).limit(50);
+      await this.processCompletionQueue();
       for (const order of pending) {
         try { await this.dispatchWave(order.id); }
         catch (error) { this.logger.error(`Matching retry failed for ${order.id}`, error instanceof Error ? error.stack : String(error)); }
@@ -116,7 +117,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
         .where(eq(orders.userId, userId)).orderBy(desc(orderEvents.createdAt)).limit(80);
       return rows.filter(row => [
         "order_accepted", "cleaner_en_route", "cleaner_arrived",
-        "cleaning_started", "cleaning_completed", "matching_timeout", "order_cancelled",
+        "cleaning_started", "cleaning_completed", "completion_reminder_sent", "completion_confirmed", "completion_issue_reported", "matching_timeout", "order_cancelled",
       ].includes(row.type));
     }
     const events = await db.select({
@@ -539,15 +540,111 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
-  async completeCleaning(orderId: string, cleanerId: string) {
+
+  /** Send reminders independently of the cleaner. Never auto-confirm or pay an order. */
+  private async processCompletionQueue() {
+    const now = new Date();
+    const waiting = await db.select({
+      id: orders.id, userId: orders.userId, submittedAt: orders.completionSubmittedAt,
+      reminderAt: orders.completionReminderAt, escalatedAt: orders.completionEscalatedAt,
+    }).from(orders).where(eq(orders.status, "pending_confirmation")).limit(50);
+    for (const order of waiting) {
+      if (!order.submittedAt || !order.userId) continue;
+      const elapsed = now.getTime() - order.submittedAt.getTime();
+      if (elapsed >= 24 * 60 * 60_000 && !order.escalatedAt) {
+        const [updated] = await db.update(orders).set({completionEscalatedAt: now})
+          .where(and(eq(orders.id, order.id), eq(orders.status,"pending_confirmation"), isNull(orders.completionEscalatedAt))).returning({id:orders.id});
+        if (updated) {
+          await db.insert(orderEvents).values({orderId:order.id,eventType:"completion_support_escalated"});
+          void this.notifyTelegram(order.userId,"⚠️ Подтверждение уборки ожидается более 24 часов. Заказ передан на рассмотрение поддержки CleanGo.");
+        }
+      } else if (elapsed >= 15 * 60_000 && !order.reminderAt) {
+        const [updated] = await db.update(orders).set({completionReminderAt:now})
+          .where(and(eq(orders.id,order.id),eq(orders.status,"pending_confirmation"),isNull(orders.completionReminderAt))).returning({id:orders.id});
+        if (updated) {
+          await db.insert(orderEvents).values({orderId:order.id,eventType:"completion_reminder_sent"});
+          void this.notifyTelegram(order.userId,"🧹 Клинер завершил уборку. Пожалуйста, проверьте результат в CleanGo и подтвердите выполнение или сообщите о проблеме.");
+        }
+      }
+    }
+  }
+
+  /** Client chooses the inspection method; photographs are the safe default. */
+  async setInspectionMethod(orderId:string, clientId:string, method:"personal"|"photos") {
+    if (!["personal","photos"].includes(method)) throw new BadRequestException("Некорректный способ проверки");
+    const [updated] = await db.update(orders).set({inspectionMethod:method})
+      .where(and(eq(orders.id,orderId),eq(orders.userId,clientId),
+        inArray(orders.status,["accepted","en_route","arrived","in_progress"]))).returning();
+    if (!updated) throw new ConflictException("Выбрать проверку можно только до завершения назначенной уборки");
+    await db.insert(orderEvents).values({orderId,actorId:clientId,eventType:"inspection_method_updated"});
+    return {inspectionMethod:updated.inspectionMethod};
+  }
+
+  async confirmCompletion(orderId:string, clientId:string) {
+    const [updated] = await db.update(orders).set({status:"completed",clientConfirmedAt:new Date()})
+      .where(and(eq(orders.id,orderId),eq(orders.userId,clientId),eq(orders.status,"pending_confirmation"))).returning();
+    if (!updated) throw new ConflictException("Уборка не ожидает подтверждения");
+    await db.insert(orderEvents).values({orderId,actorId:clientId,eventType:"completion_confirmed"});
+    if (updated.cleanerId) void this.notifyTelegram(updated.cleanerId,"✅ Клиент подтвердил выполнение уборки. Заказ завершён.");
+    return {status:updated.status,clientConfirmedAt:updated.clientConfirmedAt};
+  }
+
+  async reportCompletionIssue(orderId:string,clientId:string) {
+    const [updated] = await db.update(orders).set({status:"disputed",completionIssueAt:new Date()})
+      .where(and(eq(orders.id,orderId),eq(orders.userId,clientId),eq(orders.status,"pending_confirmation"))).returning();
+    if (!updated) throw new ConflictException("Обращение возможно во время ожидания подтверждения");
+    await db.insert(orderEvents).values({orderId,actorId:clientId,eventType:"completion_issue_reported"});
+    return {status:"disputed",message:"Обращение зарегистрировано для рассмотрения поддержкой. Автоматической выплаты нет."};
+  }
+
+  async leaveReview(orderId:string,clientId:string,rating:number,reviewText?:string) {
+    if (!Number.isInteger(rating)||rating<1||rating>5) throw new BadRequestException("Оценка от 1 до 5");
+    if (reviewText && reviewText.length>1000) throw new BadRequestException("Отзыв слишком длинный");
+    const [updated] = await db.update(orders).set({rating,reviewText:reviewText?.trim()||null,reviewedAt:new Date()})
+      .where(and(eq(orders.id,orderId),eq(orders.userId,clientId),eq(orders.status,"completed"),isNull(orders.reviewedAt))).returning({id:orders.id});
+    if (!updated) throw new ConflictException("Отзыв уже оставлен или заказ не завершён");
+    await db.insert(orderEvents).values({orderId,actorId:clientId,eventType:"review_submitted"});
+    return {rating,reviewText:reviewText?.trim()||null};
+  }
+
+  async cleanerReputation(cleanerId:string) {
+    const rows = await db.select({rating:orders.rating,reviewText:orders.reviewText,reviewedAt:orders.reviewedAt})
+      .from(orders).where(and(eq(orders.cleanerId,cleanerId),eq(orders.status,"completed")));
+    const reviews=rows.filter(x=>x.rating!=null);
+    return {completedOrders:rows.length,reviewCount:reviews.length,
+      rating:reviews.length?Number((reviews.reduce((s,x)=>s+(x.rating??0),0)/reviews.length).toFixed(2)):null,
+      reviews:reviews.filter(x=>x.reviewText).sort((a,b)=>(b.reviewedAt?.getTime()??0)-(a.reviewedAt?.getTime()??0)).slice(0,20)};
+  }
+
+  async completeCleaning(orderId: string, cleanerId: string, photos: string[] = []) {
+    // Store small private photo reports in PostgreSQL for MVP. No public image URLs.
+    if (!Array.isArray(photos)) throw new BadRequestException("Некорректные фотографии");
+    for(const photo of photos) {
+      if(typeof photo!=="string" || photo.length>450000) throw new BadRequestException("Фотография слишком большая");
+      const match=/^data:image\/(jpeg|png|webp);base64,([A-Za-z0-9+/]+={0,2})$/.exec(photo);
+      if(!match) throw new BadRequestException("Формат фото: JPEG, PNG или WebP");
+      const bytes=Buffer.from(match[2],"base64");
+      if(bytes.length>320000 || bytes.length<100 || !(
+        (bytes[0]===0xff&&bytes[1]===0xd8&&bytes[2]===0xff) ||
+        (bytes[0]===0x89&&bytes[1]===0x50&&bytes[2]===0x4e&&bytes[3]===0x47) ||
+        (bytes.toString("ascii",0,4)==="RIFF"&&bytes.toString("ascii",8,12)==="WEBP")
+      )) throw new BadRequestException("Фото повреждено или превышает 320 КБ");
+    }
+    const [current]=await db.select({inspectionMethod:orders.inspectionMethod}).from(orders)
+      .where(and(eq(orders.id,orderId),eq(orders.cleanerId,cleanerId),eq(orders.status,"in_progress"))).limit(1);
+    if(!current) throw new ConflictException("Завершить можно только свою выполняемую уборку");
+    if(current.inspectionMethod==="photos" && (photos.length<3 || photos.length>5))
+      throw new BadRequestException("Для дистанционной проверки нужны 3–5 фотографий");
+    if(current.inspectionMethod==="personal" && photos.length>5)
+      throw new BadRequestException("Не больше 5 фотографий");
     return db.transaction(async tx => {
       const [updated] = await tx.update(orders)
-        .set({ status: "completed" })
-        .where(and(eq(orders.id, orderId), eq(orders.cleanerId, cleanerId), eq(orders.status, "in_progress")))
+        .set({ status: "pending_confirmation", completionPhotos:photos, completionSubmittedAt:new Date() })
+        .where(and(eq(orders.id, orderId), eq(orders.cleanerId, cleanerId), eq(orders.status, "in_progress"),eq(orders.inspectionMethod,current.inspectionMethod)))
         .returning();
       if (!updated) throw new ConflictException("Завершить можно только свою выполняемую уборку");
       await tx.insert(orderEvents).values({ orderId, actorId: cleanerId, eventType: "cleaning_completed" });
-      if(updated.userId)void this.notifyTelegram(updated.userId,this.formatOrderNotice("✨ <b>Уборка завершена</b>",updated,"Заказ отмечен как выполненный."));
+      if(updated.userId)void this.notifyTelegram(updated.userId,this.formatOrderNotice("✨ <b>Клинер закончил уборку</b>",updated,"Проверьте результат и подтвердите его в CleanGo либо сообщите о проблеме."));
       return updated;
     });
   }
@@ -683,7 +780,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
   }
 
   async findMinePage(userId: string, section: "active" | "archive", page: number) {
-    const terminal = ["completed", "cancelled", "unassigned", "expired", "failed", "no_cleaner"];
+    const terminal = ["completed", "cancelled", "unassigned", "expired", "failed", "no_cleaner", "disputed"];
     const condition = and(eq(orders.userId, userId), section === "archive"
       ? inArray(orders.status, terminal)
       : sql`${orders.status} NOT IN ('completed', 'cancelled', 'unassigned', 'expired', 'failed', 'no_cleaner')`);
