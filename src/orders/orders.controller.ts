@@ -232,7 +232,7 @@ export class OrdersController {
   async review(@Param("id") id:string,@Req() request:Request,@Body() body:{rating:number;reviewText?:string}) {
     const user=(request as AuthenticatedRequest).user;
     if(user.role!=="client"||!user.phoneVerifiedAt)throw new ForbiddenException("Требуется клиент");
-    if(!body||!Number.isInteger(body.rating)||body.rating<1||body.rating>5|| (body.reviewText!=null && (typeof body.reviewText!=="string"||body.reviewText.length>1000)))
+    if(!body||!Number.isFinite(body.rating)||body.rating<0.5||body.rating>5||!Number.isInteger(body.rating*2)|| (body.reviewText!=null && (typeof body.reviewText!=="string"||body.reviewText.length>1000)))
       throw new BadRequestException("Неверная оценка или текст отзыва");
     return this.ordersService.leaveReview(id,user.id,body.rating,body.reviewText);
   }
