@@ -84,7 +84,7 @@ export const orders = pgTable("orders", {
   completionEscalatedAt: timestamp("completion_escalated_at", { withTimezone: true }),
   clientConfirmedAt: timestamp("client_confirmed_at", { withTimezone: true }),
   completionIssueAt: timestamp("completion_issue_at", { withTimezone: true }),
-  rating: integer("rating"),
+  rating: numeric("rating", { precision: 2, scale: 1, mode: "number" }),
   reviewText: text("review_text"),
   reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
 
