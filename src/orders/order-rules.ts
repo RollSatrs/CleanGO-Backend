@@ -15,7 +15,10 @@ export const ORDER_STATUSES = [
   "pending",
   "accepted",
   "in_progress",
+  "pending_confirmation",
   "completed",
+  "disputed",
+  "unassigned",
   "cancelled",
 ] as const;
 
@@ -27,8 +30,11 @@ export type OrderStatus = (typeof ORDER_STATUSES)[number];
 export const ORDER_STATUS_TRANSITIONS: Record<OrderStatus, readonly OrderStatus[]> = {
   pending: ["accepted", "cancelled"],
   accepted: ["in_progress", "cancelled"],
-  in_progress: ["completed", "cancelled"],
+  in_progress: ["pending_confirmation", "cancelled"],
+  pending_confirmation: ["completed", "disputed"],
   completed: [],
+  disputed: [],
+  unassigned: [],
   cancelled: [],
 };
 
