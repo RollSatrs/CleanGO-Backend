@@ -463,21 +463,39 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
     }
     const valid=(lat:number|undefined,lon:number|undefined)=>lat!=null && lon!=null && Number.isFinite(lat) && Number.isFinite(lon) && Math.abs(lat)<=90 && Math.abs(lon)<=180;
     let etaMinutes:number|null=null;
-    if(mode!=="transit" && valid(startLat,startLon) && order.latitude!=null && order.longitude!=null) {
-      try {
-        const controller=new AbortController();
-        const timeout=setTimeout(()=>controller.abort(),6000);
+    if(valid(startLat,startLon) && order.latitude!=null && order.longitude!=null) {
+      const endLat=Number(order.latitude), endLon=Number(order.longitude);
+      if(valid(endLat,endLon)) {
+        // Fallback distance is an estimate, not a real transit timetable or pedestrian route.
+        const rad=Math.PI/180;
+        const dLat=(endLat-startLat!)*rad, dLon=(endLon-startLon!)*rad;
+        const h=Math.sin(dLat/2)**2+Math.cos(startLat!*rad)*Math.cos(endLat*rad)*Math.sin(dLon/2)**2;
+        const directKm=6371*2*Math.asin(Math.min(1,Math.sqrt(h)));
+        let roadKm:number|null=null, driveMinutes:number|null=null;
         try {
-          const profile=mode==="walking"?"foot":"driving";
-          const url=`https://router.project-osrm.org/route/v1/${profile}/${startLon},${startLat};${order.longitude},${order.latitude}?overview=false`;
-          const response=await fetch(url,{signal:controller.signal});
-          if(response.ok) {
-            const data=await response.json() as {code?:string;routes?:Array<{duration:number}>};
-            const duration=data.routes?.[0]?.duration;
-            if(data.code==="Ok" && duration!=null && Number.isFinite(duration) && duration>0)etaMinutes=Math.max(1,Math.ceil(duration/60));
-          }
-        } finally {clearTimeout(timeout);}
-      } catch { /* ETA optional; departure must still work */ }
+          const controller=new AbortController();
+          const timeout=setTimeout(()=>controller.abort(),6000);
+          try {
+            const url=`https://router.project-osrm.org/route/v1/driving/${startLon},${startLat};${endLon},${endLat}?overview=false`;
+            const response=await fetch(url,{signal:controller.signal});
+            if(response.ok) {
+              const data=await response.json() as {code?:string;routes?:Array<{distance:number;duration:number}>};
+              const route=data.routes?.[0];
+              if(data.code==="Ok" && route && Number.isFinite(route.distance) && route.distance>=0 && Number.isFinite(route.duration) && route.duration>=0) {
+                roadKm=route.distance/1000;
+                driveMinutes=route.duration/60;
+              }
+            }
+          } finally {clearTimeout(timeout);}
+        } catch { /* Public routing service may be temporarily unavailable. */ }
+        // Straight-line distance is inflated only when the road route is unavailable.
+        const estimatedKm=roadKm??directKm*1.4;
+        if(estimatedKm<=100 && Number.isFinite(estimatedKm)) {
+          if(mode==="car")etaMinutes=Math.max(1,Math.ceil(driveMinutes??estimatedKm/25*60));
+          if(mode==="walking")etaMinutes=Math.max(1,Math.ceil(estimatedKm/4.5*60));
+          if(mode==="transit")etaMinutes=Math.max(1,Math.ceil(estimatedKm/18*60+10));
+        }
+      }
     }
     return db.transaction(async tx=>{
       const [updated]=await tx.update(orders).set({
