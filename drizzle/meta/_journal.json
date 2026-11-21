@@ -71,6 +71,13 @@
       "when": 1795260000000,
       "tag": "0009_cleaner_departure_eta",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1795270000000,
+      "tag": "0010_completion_review_flow",
+      "breakpoints": true
     }
   ]
 }
