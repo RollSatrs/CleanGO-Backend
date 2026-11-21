@@ -661,7 +661,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
     const declined = offers.filter(offer => offer.status === "declined").length;
     const awaiting = offers.filter(offer => offer.status === "offered" && offer.expiresAt > now).length;
     let cleaner: { name: string; phone: string | null } | null = null;
-    if (order.cleanerId && ["accepted", "en_route", "arrived", "in_progress", "completed"].includes(order.status)) {
+    if (order.cleanerId && ["accepted", "en_route", "arrived", "in_progress", "pending_confirmation", "completed", "disputed"].includes(order.status)) {
       const [user] = await db.select({ firstName: users.firstName, lastName: users.lastName, phone: users.phone })
         .from(users).where(eq(users.id, order.cleanerId)).limit(1);
       if (user) cleaner = { name: [user.firstName, user.lastName].filter(Boolean).join(" ") || "Исполнитель CleanGo", phone: user.phone };
@@ -687,7 +687,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
       id: orders.id, status: orders.status, cleaningType: orders.cleaningType,
       area: orders.area, price: orders.price, address: orders.address,
       createdAt: orders.createdAt, latitude: orders.latitude, longitude: orders.longitude, clientFirstName: users.firstName,
-      clientLastName: users.lastName, clientPhone: users.phone,
+      clientLastName: users.lastName, clientPhone: users.phone, inspectionMethod:orders.inspectionMethod,
     }).from(orders).leftJoin(users, eq(orders.userId, users.id))
       .where(and(eq(orders.cleanerId, cleanerId), sql`${orders.status} IN ('accepted', 'en_route', 'arrived', 'in_progress')`))
       .orderBy(desc(orders.createdAt));
