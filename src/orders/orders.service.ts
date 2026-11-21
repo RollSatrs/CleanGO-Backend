@@ -447,8 +447,47 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
     return {sharing:true};
   }
 
-  async markEnRoute(orderId: string, cleanerId: string) {
-    return this.transitionAssigned(orderId, cleanerId, "accepted", "en_route", "cleaner_en_route");
+  async markEnRoute(orderId: string, cleanerId: string, input: { travelMode?: string; latitude?: number; longitude?: number } = {}) {
+    const mode = input.travelMode ?? "car";
+    if (!["car", "walking", "transit"].includes(mode)) throw new BadRequestException("Некорректный способ передвижения");
+    const [order] = await db.select({latitude:orders.latitude,longitude:orders.longitude,status:orders.status})
+      .from(orders).where(and(eq(orders.id,orderId),eq(orders.cleanerId,cleanerId))).limit(1);
+    if (!order || order.status !== "accepted") throw new ConflictException("Заказ уже изменён или не назначен вам");
+    let startLat = input.latitude, startLon = input.longitude;
+    if (startLat == null || startLon == null) {
+      const [profile] = await db.select({latitude:cleanerProfiles.latitude,longitude:cleanerProfiles.longitude,lastLocationAt:cleanerProfiles.lastLocationAt})
+        .from(cleanerProfiles).where(eq(cleanerProfiles.userId,cleanerId)).limit(1);
+      if (profile?.lastLocationAt && Date.now()-profile.lastLocationAt.getTime()<15*60_000 && profile.latitude!=null && profile.longitude!=null) {
+        startLat=Number(profile.latitude);startLon=Number(profile.longitude);
+      }
+    }
+    const valid=(lat:number|undefined,lon:number|undefined)=>lat!=null && lon!=null && Number.isFinite(lat) && Number.isFinite(lon) && Math.abs(lat)<=90 && Math.abs(lon)<=180;
+    let etaMinutes:number|null=null;
+    if(mode!=="transit" && valid(startLat,startLon) && order.latitude!=null && order.longitude!=null) {
+      try {
+        const controller=new AbortController();
+        const timeout=setTimeout(()=>controller.abort(),6000);
+        try {
+          const profile=mode==="walking"?"foot":"driving";
+          const url=`https://router.project-osrm.org/route/v1/${profile}/${startLon},${startLat};${order.longitude},${order.latitude}?overview=false`;
+          const response=await fetch(url,{signal:controller.signal});
+          if(response.ok) {
+            const data=await response.json() as {code?:string;routes?:Array<{duration:number}>};
+            const duration=data.routes?.[0]?.duration;
+            if(data.code==="Ok" && duration!=null && Number.isFinite(duration) && duration>0)etaMinutes=Math.max(1,Math.ceil(duration/60));
+          }
+        } finally {clearTimeout(timeout);}
+      } catch { /* ETA optional; departure must still work */ }
+    }
+    return db.transaction(async tx=>{
+      const [updated]=await tx.update(orders).set({
+        status:"en_route",travelMode:mode,etaMinutes,etaCalculatedAt:etaMinutes==null?null:new Date(),
+      }).where(and(eq(orders.id,orderId),eq(orders.cleanerId,cleanerId),eq(orders.status,"accepted"))).returning();
+      if(!updated)throw new ConflictException("Заказ уже изменён");
+      await tx.insert(orderEvents).values({orderId,actorId:cleanerId,eventType:"cleaner_en_route"});
+      if(updated.userId)void this.notifyTelegram(updated.userId,this.formatOrderNotice("🚗 <b>Клинер выехал</b>",updated,"Клинер направляется к вам. Примерное время смотрите в Mini App."));
+      return updated;
+    });
   }
 
   async markArrived(orderId: string, cleanerId: string) {
@@ -497,7 +536,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
 
   /** Client-visible aggregate counts, never identities or coordinates of candidate cleaners. */
   async getMatchingProgress(orderId: string, clientId: string) {
-    const [order] = await db.select({ id: orders.id, status: orders.status, cleanerId: orders.cleanerId })
+    const [order] = await db.select({ id: orders.id, status: orders.status, cleanerId: orders.cleanerId, travelMode:orders.travelMode, etaMinutes:orders.etaMinutes, etaCalculatedAt:orders.etaCalculatedAt })
       .from(orders).where(and(eq(orders.id, orderId), eq(orders.userId, clientId))).limit(1);
     if (!order) return null;
     const now = new Date();
@@ -525,7 +564,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
         }
       }
     }
-    return { status: order.status, sent, declined, awaiting, cleaner, tripLocation };
+    return { status: order.status, sent, declined, awaiting, cleaner, tripLocation, travelMode:order.travelMode, etaMinutes:order.etaMinutes, etaCalculatedAt:order.etaCalculatedAt };
   }
 
   async findCleanerJobs(cleanerId: string) {
