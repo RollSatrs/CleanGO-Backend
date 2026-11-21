@@ -74,6 +74,9 @@ export const orders = pgTable("orders", {
 
   cleanerId: uuid("cleaner_id").references(() => users.id),
   acceptedAt: timestamp("accepted_at", { withTimezone: true }),
+  travelMode: text("travel_mode"),
+  etaMinutes: integer("eta_minutes"),
+  etaCalculatedAt: timestamp("eta_calculated_at", { withTimezone: true }),
 
   latitude: numeric("latitude", { precision: 9, scale: 6 }),
   longitude: numeric("longitude", { precision: 9, scale: 6 }),
