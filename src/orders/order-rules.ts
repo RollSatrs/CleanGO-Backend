@@ -12,25 +12,19 @@ export const MATCHING_PROPOSAL = {
 } as const;
 
 export const ORDER_STATUSES = [
-  "pending",
-  "accepted",
-  "in_progress",
-  "pending_confirmation",
-  "completed",
-  "disputed",
-  "unassigned",
-  "cancelled",
+  "pending", "accepted", "en_route", "arrived", "in_progress",
+  "pending_confirmation", "completed", "disputed", "unassigned", "cancelled",
 ] as const;
 
 export type OrderStatus = (typeof ORDER_STATUSES)[number];
 
-/** Client creates pending; only an eligible cleaner may accept.
- * Transitions must be enforced by the server, never trusted from a client payload.
- */
+/** Canonical lifecycle for the existing MVP; payments and support decisions are separate. */
 export const ORDER_STATUS_TRANSITIONS: Record<OrderStatus, readonly OrderStatus[]> = {
-  pending: ["accepted", "cancelled"],
-  accepted: ["in_progress", "cancelled"],
-  in_progress: ["pending_confirmation", "cancelled"],
+  pending: ["accepted", "cancelled", "unassigned"],
+  accepted: ["en_route", "cancelled"],
+  en_route: ["arrived"],
+  arrived: ["in_progress"],
+  in_progress: ["pending_confirmation"],
   pending_confirmation: ["completed", "disputed"],
   completed: [],
   disputed: [],
