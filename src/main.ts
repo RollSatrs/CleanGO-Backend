@@ -1,11 +1,13 @@
 
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
+import { json } from 'express';
 import { AppModule } from './app.module.js';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
+  app.use(json({limit:"3mb"}));
   app.enableCors({
     origin: (origin: string | undefined, callback: (error: Error | null, allowed?: boolean) => void) => {
       // Telegram Mini App can be hosted on a temporary HTTPS ngrok domain.
