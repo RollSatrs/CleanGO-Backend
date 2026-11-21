@@ -183,10 +183,10 @@ export class OrdersController {
   }
 
   @Patch(":id/en-route")
-  async markEnRoute(@Param("id") id: string, @Req() request: Request) {
+  async markEnRoute(@Param("id") id: string, @Req() request: Request, @Body() body: { travelMode?: string; latitude?: number; longitude?: number }) {
     const user = (request as AuthenticatedRequest).user;
     if (user.role !== "cleaner" || !user.phoneVerifiedAt) throw new ForbiddenException("Требуется подтверждённый клинер");
-    return this.ordersService.markEnRoute(id, user.id);
+    return this.ordersService.markEnRoute(id, user.id, body ?? {});
   }
 
   @Patch(":id/arrived")
