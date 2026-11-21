@@ -1,5 +1,5 @@
 import { vi, expect, it, describe, beforeEach } from 'vitest';
-import { ForbiddenException } from '@nestjs/common';
+import { ForbiddenException, BadRequestException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { OrdersController } from './orders.controller.js';
 import { OrdersService } from './orders.service.js';
@@ -17,6 +17,7 @@ describe('OrdersController', () => {
     findCleanerJobs: vi.fn(),
     startCleaning: vi.fn(),
     completeCleaning: vi.fn(),
+    leaveReview: vi.fn(),
   };
 
   beforeEach(async () => {
@@ -78,6 +79,17 @@ describe('OrdersController', () => {
     }
     expect(ordersServiceMock.startCleaning).not.toHaveBeenCalled();
     expect(ordersServiceMock.completeCleaning).not.toHaveBeenCalled();
+  });
+
+
+  it('allows a confirmed client to rate in half-star increments', async () => {
+    const request = { user: { id: 'client-1', role: 'client', phoneVerifiedAt: new Date() } };
+    ordersServiceMock.leaveReview.mockResolvedValue({ rating: 4.5 });
+    await expect(controller.review('job-1', request as never, {rating:4.5})).resolves.toEqual({rating:4.5});
+    expect(ordersServiceMock.leaveReview).toHaveBeenCalledExactlyOnceWith('job-1', 'client-1', 4.5, undefined);
+    await expect(controller.review('job-1', request as never, {rating:4.3})).rejects.toBeInstanceOf(BadRequestException);
+    await expect(controller.review('job-1', request as never, {rating:0})).rejects.toBeInstanceOf(BadRequestException);
+    await expect(controller.review('job-1', request as never, {rating:5.5})).rejects.toBeInstanceOf(BadRequestException);
   });
 
   it('denies accepting and declining offers to clients', async () => {
