@@ -594,29 +594,36 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
   }
 
   async confirmCompletion(orderId:string, clientId:string) {
-    const [updated] = await db.update(orders).set({status:"completed",clientConfirmedAt:new Date()})
-      .where(and(eq(orders.id,orderId),eq(orders.userId,clientId),eq(orders.status,"pending_confirmation"))).returning();
-    if (!updated) throw new ConflictException("Уборка не ожидает подтверждения");
-    await db.insert(orderEvents).values({orderId,actorId:clientId,eventType:"completion_confirmed"});
-    if (updated.cleanerId) void this.notifyTelegram(updated.cleanerId,"✅ Клиент подтвердил выполнение уборки. Заказ завершён.");
+    const updated=await db.transaction(async tx=>{
+      const [order] = await tx.update(orders).set({status:"completed",clientConfirmedAt:new Date()})
+        .where(and(eq(orders.id,orderId),eq(orders.userId,clientId),eq(orders.status,"pending_confirmation"))).returning();
+      if(!order)throw new ConflictException("Уборка не ожидает подтверждения");
+      await tx.insert(orderEvents).values({orderId,actorId:clientId,eventType:"completion_confirmed"});
+      return order;
+    });
+    if(updated.cleanerId)void this.notifyTelegram(updated.cleanerId,"✅ Клиент подтвердил выполнение уборки. Заказ завершён.");
     return {status:updated.status,clientConfirmedAt:updated.clientConfirmedAt};
   }
 
   async reportCompletionIssue(orderId:string,clientId:string) {
-    const [updated] = await db.update(orders).set({status:"disputed",completionIssueAt:new Date()})
-      .where(and(eq(orders.id,orderId),eq(orders.userId,clientId),eq(orders.status,"pending_confirmation"))).returning();
-    if (!updated) throw new ConflictException("Обращение возможно во время ожидания подтверждения");
-    await db.insert(orderEvents).values({orderId,actorId:clientId,eventType:"completion_issue_reported"});
+    await db.transaction(async tx=>{
+      const [updated] = await tx.update(orders).set({status:"disputed",completionIssueAt:new Date()})
+        .where(and(eq(orders.id,orderId),eq(orders.userId,clientId),eq(orders.status,"pending_confirmation"))).returning({id:orders.id});
+      if(!updated)throw new ConflictException("Обращение возможно во время ожидания подтверждения");
+      await tx.insert(orderEvents).values({orderId,actorId:clientId,eventType:"completion_issue_reported"});
+    });
     return {status:"disputed",message:"Обращение зарегистрировано для рассмотрения поддержкой. Автоматической выплаты нет."};
   }
 
   async leaveReview(orderId:string,clientId:string,rating:number,reviewText?:string) {
-    if (!Number.isInteger(rating)||rating<1||rating>5) throw new BadRequestException("Оценка от 1 до 5");
-    if (reviewText && reviewText.length>1000) throw new BadRequestException("Отзыв слишком длинный");
-    const [updated] = await db.update(orders).set({rating,reviewText:reviewText?.trim()||null,reviewedAt:new Date()})
-      .where(and(eq(orders.id,orderId),eq(orders.userId,clientId),eq(orders.status,"completed"),isNull(orders.reviewedAt))).returning({id:orders.id});
-    if (!updated) throw new ConflictException("Отзыв уже оставлен или заказ не завершён");
-    await db.insert(orderEvents).values({orderId,actorId:clientId,eventType:"review_submitted"});
+    if(!Number.isInteger(rating)||rating<1||rating>5)throw new BadRequestException("Оценка от 1 до 5");
+    if(reviewText && reviewText.length>1000)throw new BadRequestException("Отзыв слишком длинный");
+    await db.transaction(async tx=>{
+      const [updated] = await tx.update(orders).set({rating,reviewText:reviewText?.trim()||null,reviewedAt:new Date()})
+        .where(and(eq(orders.id,orderId),eq(orders.userId,clientId),eq(orders.status,"completed"),isNull(orders.reviewedAt))).returning({id:orders.id});
+      if(!updated)throw new ConflictException("Отзыв уже оставлен или заказ не завершён");
+      await tx.insert(orderEvents).values({orderId,actorId:clientId,eventType:"review_submitted"});
+    });
     return {rating,reviewText:reviewText?.trim()||null};
   }
 
@@ -650,16 +657,17 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
       throw new BadRequestException("Для дистанционной проверки нужны 3–5 фотографий");
     if(current.inspectionMethod==="personal" && photos.length>5)
       throw new BadRequestException("Не больше 5 фотографий");
-    return db.transaction(async tx => {
+    const submitted = await db.transaction(async tx => {
       const [updated] = await tx.update(orders)
         .set({ status: "pending_confirmation", completionPhotos:photos, completionSubmittedAt:new Date() })
         .where(and(eq(orders.id, orderId), eq(orders.cleanerId, cleanerId), eq(orders.status, "in_progress"),eq(orders.inspectionMethod,current.inspectionMethod)))
         .returning();
       if (!updated) throw new ConflictException("Завершить можно только свою выполняемую уборку");
       await tx.insert(orderEvents).values({ orderId, actorId: cleanerId, eventType: "cleaning_completed" });
-      if(updated.userId)void this.notifyTelegram(updated.userId,this.formatOrderNotice("✨ <b>Клинер закончил уборку</b>",updated,"Проверьте результат и подтвердите его в CleanGo либо сообщите о проблеме."));
       return updated;
     });
+    if(submitted.userId)void this.notifyTelegram(submitted.userId,this.formatOrderNotice("✨ <b>Клинер закончил уборку</b>",submitted,"Проверьте результат и подтвердите его в CleanGo либо сообщите о проблеме."));
+    return submitted;
   }
 
   /** Client-visible aggregate counts, never identities or coordinates of candidate cleaners. */
