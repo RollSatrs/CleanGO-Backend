@@ -339,6 +339,16 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
       .where(and(sql`${orders.status} IN ('accepted', 'en_route', 'arrived', 'in_progress')`, sql`${orders.cleanerId} IS NOT NULL`));
     const busyIds = new Set(busy.map(row => row.cleanerId).filter((id): id is string => id !== null));
     const now = new Date();
+    // Reputation uses only confirmed, completed jobs. Bayesian smoothing prevents
+    // a single five-star review from outranking experienced cleaners by default.
+    const completedRatings = await db.select({cleanerId:orders.cleanerId,rating:orders.rating})
+      .from(orders).where(and(eq(orders.status,"completed"),sql`${orders.rating} IS NOT NULL`));
+    const reputation = new Map<string,{count:number;sum:number}>();
+    for(const item of completedRatings) {
+      if(!item.cleanerId || item.rating==null)continue;
+      const stat=reputation.get(item.cleanerId)??{count:0,sum:0};
+      stat.count++;stat.sum+=item.rating;reputation.set(item.cleanerId,stat);
+    }
 
     const candidates: MatchingCandidate[] = profiles.map(profile => {
       const lat = profile.latitude == null ? null : Number(profile.latitude);
@@ -363,6 +373,9 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
         hasActiveOrder: busyIds.has(profile.cleanerId),
         supportsCleaningType: profile.serviceTypes?.includes(order.cleaningType) === true,
         servesArea,
+        // Prior 4.2 with weight 5 keeps new cleaners eligible and reduces one-review bias.
+        rating: (()=>{const stat=reputation.get(profile.cleanerId);return stat?(stat.sum+4.2*5)/(stat.count+5):4.2;})(),
+        reviewCount:reputation.get(profile.cleanerId)?.count??0,
       };
     });
 
