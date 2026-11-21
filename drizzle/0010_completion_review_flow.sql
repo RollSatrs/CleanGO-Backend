@@ -1,0 +1,10 @@
+ALTER TABLE "orders" ADD COLUMN IF NOT EXISTS "inspection_method" text NOT NULL DEFAULT 'photos';
+ALTER TABLE "orders" ADD COLUMN IF NOT EXISTS "completion_photos" text[];
+ALTER TABLE "orders" ADD COLUMN IF NOT EXISTS "completion_submitted_at" timestamp with time zone;
+ALTER TABLE "orders" ADD COLUMN IF NOT EXISTS "completion_reminder_at" timestamp with time zone;
+ALTER TABLE "orders" ADD COLUMN IF NOT EXISTS "completion_escalated_at" timestamp with time zone;
+ALTER TABLE "orders" ADD COLUMN IF NOT EXISTS "client_confirmed_at" timestamp with time zone;
+ALTER TABLE "orders" ADD COLUMN IF NOT EXISTS "completion_issue_at" timestamp with time zone;
+ALTER TABLE "orders" ADD COLUMN IF NOT EXISTS "rating" integer;
+ALTER TABLE "orders" ADD COLUMN IF NOT EXISTS "review_text" text;
+ALTER TABLE "orders" ADD COLUMN IF NOT EXISTS "reviewed_at" timestamp with time zone;
