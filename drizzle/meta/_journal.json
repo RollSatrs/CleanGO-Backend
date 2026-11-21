@@ -64,6 +64,13 @@
       "when": 1795009544953,
       "tag": "0008_wealthy_redwing",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1795260000000,
+      "tag": "0009_cleaner_departure_eta",
+      "breakpoints": true
     }
   ]
 }
