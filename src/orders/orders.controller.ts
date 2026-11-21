@@ -205,13 +205,54 @@ export class OrdersController {
     return this.ordersService.startCleaning(id, user.id);
   }
 
+
+  @Patch(":id/inspection")
+  async inspection(@Param("id") id:string,@Req() request:Request,@Body() body:{method:"personal"|"photos"}) {
+    const user=(request as AuthenticatedRequest).user;
+    if(user.role!=="client"||!user.phoneVerifiedAt)throw new ForbiddenException("Требуется клиент");
+    if(!body || !["personal","photos"].includes(body.method))throw new BadRequestException("Некорректный способ проверки");
+    return this.ordersService.setInspectionMethod(id,user.id,body.method);
+  }
+
+  @Patch(":id/confirm-completion")
+  async confirmCompletion(@Param("id") id:string,@Req() request:Request) {
+    const user=(request as AuthenticatedRequest).user;
+    if(user.role!=="client"||!user.phoneVerifiedAt)throw new ForbiddenException("Требуется клиент");
+    return this.ordersService.confirmCompletion(id,user.id);
+  }
+
+  @Patch(":id/completion-issue")
+  async completionIssue(@Param("id") id:string,@Req() request:Request) {
+    const user=(request as AuthenticatedRequest).user;
+    if(user.role!=="client"||!user.phoneVerifiedAt)throw new ForbiddenException("Требуется клиент");
+    return this.ordersService.reportCompletionIssue(id,user.id);
+  }
+
+  @Post(":id/review")
+  async review(@Param("id") id:string,@Req() request:Request,@Body() body:{rating:number;reviewText?:string}) {
+    const user=(request as AuthenticatedRequest).user;
+    if(user.role!=="client"||!user.phoneVerifiedAt)throw new ForbiddenException("Требуется клиент");
+    if(!body||!Number.isInteger(body.rating)||body.rating<1||body.rating>5|| (body.reviewText!=null && (typeof body.reviewText!=="string"||body.reviewText.length>1000)))
+      throw new BadRequestException("Неверная оценка или текст отзыва");
+    return this.ordersService.leaveReview(id,user.id,body.rating,body.reviewText);
+  }
+
+  @Get(":id/cleaner-reputation")
+  async reputation(@Param("id") id:string,@Req() request:Request) {
+    const user=(request as AuthenticatedRequest).user;
+    if(user.role!=="client"||!user.phoneVerifiedAt)throw new ForbiddenException("Требуется клиент");
+    const order=await this.ordersService.findOneForClient(id,user.id);
+    if(!order?.cleanerId)throw new NotFoundException("Клинер не найден");
+    return this.ordersService.cleanerReputation(order.cleanerId);
+  }
+
   @Patch(":id/complete")
-  async completeCleaning(@Param("id") id: string, @Req() request: Request) {
+  async completeCleaning(@Param("id") id: string, @Req() request: Request, @Body() body: {photos?:string[]}) {
     const user = (request as AuthenticatedRequest).user;
     if (user.role !== "cleaner" || !user.phoneVerifiedAt) {
       throw new ForbiddenException("Требуется подтверждённый профиль клинера");
     }
-    return this.ordersService.completeCleaning(id, user.id);
+    return this.ordersService.completeCleaning(id, user.id, body?.photos ?? []);
   }
 
   @Get("offers/mine")
