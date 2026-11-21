@@ -47,11 +47,11 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
   /** Best-effort Telegram notifications. No private address in offer previews. */
   private async notifyTelegram(userId: string, message: string) {
     const token = process.env.TELEGRAM_BOT_TOKEN;
-    if (!token) return;
+    if (!token) { this.logger.warn("Telegram notifications disabled: TELEGRAM_BOT_TOKEN missing"); return; }
     try {
       const [recipient] = await db.select({ telegramId: users.telegramId })
         .from(users).where(eq(users.id, userId)).limit(1);
-      if (!recipient?.telegramId) return;
+      if (!recipient?.telegramId) { this.logger.warn("Telegram notification skipped: recipient has no Telegram ID"); return; }
       const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -68,7 +68,10 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
         }),
         signal: AbortSignal.timeout(5000),
       });
-      if (!response.ok) this.logger.warn(`Telegram notification failed (HTTP ${response.status})`);
+      if (!response.ok) {
+        const result = await response.json().catch(() => null) as { description?: string } | null;
+        this.logger.warn(`Telegram notification failed (HTTP ${response.status}): ${result?.description ?? "unknown error"}`);
+      }
     } catch (error) {
       this.logger.warn("Telegram notification unavailable: " + String(error));
     }
