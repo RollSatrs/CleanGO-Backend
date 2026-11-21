@@ -58,13 +58,13 @@ describe('OrdersController', () => {
     const request = { user: { id: 'cleaner-1', role: 'cleaner', phoneVerifiedAt: new Date() } };
     ordersServiceMock.findCleanerJobs.mockResolvedValue([{ id: 'job-1' }]);
     ordersServiceMock.startCleaning.mockResolvedValue({ id: 'job-1', status: 'in_progress' });
-    ordersServiceMock.completeCleaning.mockResolvedValue({ id: 'job-1', status: 'completed' });
+    ordersServiceMock.completeCleaning.mockResolvedValue({ id: 'job-1', status: 'pending_confirmation' });
     await expect(controller.findCleanerJobs(request as never)).resolves.toEqual([{ id: 'job-1' }]);
     await expect(controller.startCleaning('job-1', request as never)).resolves.toMatchObject({ status: 'in_progress' });
-    await expect(controller.completeCleaning('job-1', request as never)).resolves.toMatchObject({ status: 'completed' });
+    await expect(controller.completeCleaning('job-1', request as never)).resolves.toMatchObject({ status: 'pending_confirmation' });
     expect(ordersServiceMock.findCleanerJobs).toHaveBeenCalledWith('cleaner-1');
     expect(ordersServiceMock.startCleaning).toHaveBeenCalledWith('job-1', 'cleaner-1');
-    expect(ordersServiceMock.completeCleaning).toHaveBeenCalledWith('job-1', 'cleaner-1');
+    expect(ordersServiceMock.completeCleaning).toHaveBeenCalledWith('job-1', 'cleaner-1', []);
   });
 
   it('rejects job transitions for clients and unverified cleaners', async () => {
