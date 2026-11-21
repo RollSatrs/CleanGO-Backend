@@ -616,7 +616,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
   }
 
   async leaveReview(orderId:string,clientId:string,rating:number,reviewText?:string) {
-    if(!Number.isInteger(rating)||rating<1||rating>5)throw new BadRequestException("Оценка от 1 до 5");
+    if(!Number.isFinite(rating)||rating<0.5||rating>5||!Number.isInteger(rating*2))throw new BadRequestException("Оценка от 0,5 до 5 с шагом 0,5");
     if(reviewText && reviewText.length>1000)throw new BadRequestException("Отзыв слишком длинный");
     await db.transaction(async tx=>{
       const [updated] = await tx.update(orders).set({rating,reviewText:reviewText?.trim()||null,reviewedAt:new Date()})
