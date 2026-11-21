@@ -130,8 +130,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
     }).from(orderOffers).where(eq(orderOffers.cleanerId, userId))
       .orderBy(desc(orderOffers.createdAt)).limit(40);
     return [...events.filter(row => [
-      "order_accepted", "cleaner_en_route", "cleaner_arrived",
-      "cleaning_started", "cleaning_completed", "order_cancelled",
+      "order_accepted", "cleaning_completed", "order_cancelled",
     ].includes(row.type)), ...offers.map(offer => ({ ...offer, type: "new_offer" }))]
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()).slice(0, 80);
   }
