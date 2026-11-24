@@ -119,7 +119,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
         .where(eq(orders.userId, userId)).orderBy(desc(orderEvents.createdAt)).limit(80);
       return rows.filter(row => [
         "order_accepted", "cleaner_en_route", "cleaner_arrived",
-        "cleaning_started", "cleaning_completed", "completion_reminder_sent", "completion_confirmed", "completion_issue_reported", "matching_timeout", "order_cancelled",
+        "cleaning_started", "cleaning_completed", "completion_reminder_sent", "completion_confirmed", "completion_issue_reported", "matching_timeout", "order_cancelled", "cleaner_released", "replacement_started", "order_issue_reported", "client_wait_started",
       ].includes(row.type));
     }
     const events = await db.select({
@@ -725,7 +725,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
     let tripLocation: {latitude:number;longitude:number}|null=null;
     if(order.status==="en_route" && order.cleanerId) {
       const [event]=await db.select({eventType:orderEvents.eventType}).from(orderEvents)
-        .where(and(eq(orderEvents.orderId,orderId),inArray(orderEvents.eventType,["trip_location_on","trip_location_off"])))
+        .where(and(eq(orderEvents.orderId,orderId),eq(orderEvents.actorId,order.cleanerId),inArray(orderEvents.eventType,["trip_location_on","trip_location_off"])))
         .orderBy(desc(orderEvents.createdAt),desc(orderEvents.id)).limit(1);
       if(event?.eventType==="trip_location_on") {
         const [profile]=await db.select({latitude:cleanerProfiles.latitude,longitude:cleanerProfiles.longitude,lastLocationAt:cleanerProfiles.lastLocationAt})
