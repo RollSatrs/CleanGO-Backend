@@ -1,12 +1,13 @@
 
 import { Injectable, ConflictException, BadRequestException, Logger, OnModuleInit, OnModuleDestroy } from "@nestjs/common";
-import { eq, desc, and, isNull, gt, lte, sql, inArray, count } from "drizzle-orm";
+import { eq, desc, and, isNull, gt, lte, sql, inArray, notInArray, count } from "drizzle-orm";
 
 import { db } from "../db/index.js";
 import { orders, orderOffers, orderEvents, cleanerProfiles, users, userAvatars } from "../db/schema.js";
 import { rankCandidates, selectOfferBatch, type MatchingCandidate } from "./matching-engine.js";
 import { locationIsFresh, availabilityStatus, availabilityExpiresAt, type AvailabilityHours } from "./cleaner-availability.js";
 
+import { clientHistoryFilter, cleanerHistoryStatuses, type ClientHistorySection } from "./order-history.js";
 import { PricingService } from "../pricing/pricing.service.js";
 import { CreateOrderDto } from "./dto/create-order.dto.js";
 
@@ -811,16 +812,25 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
-  async findMinePage(userId: string, section: "active" | "archive", page: number) {
-    const terminal = ["completed", "cancelled", "unassigned", "expired", "failed", "no_cleaner", "disputed"];
-    const condition = and(eq(orders.userId, userId), section === "archive"
-      ? inArray(orders.status, terminal)
-      : sql`${orders.status} NOT IN ('completed', 'cancelled', 'unassigned', 'expired', 'failed', 'no_cleaner')`);
-    const [totalRow] = await db.select({ total: count() }).from(orders).where(condition);
-    const items = await db.select().from(orders).where(condition)
-      .orderBy(desc(orders.createdAt), desc(orders.id))
-      .limit(5).offset((page - 1) * 5);
-    return { items, page, pageSize: 5, total: totalRow?.total ?? 0, hasMore: page * 5 < (totalRow?.total ?? 0) };
+  async findMinePage(userId: string, section: ClientHistorySection, page: number) {
+    const filter=clientHistoryFilter(section);
+    const condition=and(eq(orders.userId,userId),filter.exclude?notInArray(orders.status,filter.statuses):inArray(orders.status,filter.statuses));
+    const [totalRow]=await db.select({total:count()}).from(orders).where(condition);
+    const items=await db.select({id:orders.id,cleaningType:orders.cleaningType,area:orders.area,address:orders.address,status:orders.status,price:orders.price,createdAt:orders.createdAt,rating:orders.rating}).from(orders).where(condition).orderBy(desc(orders.createdAt),desc(orders.id)).limit(5).offset((page-1)*5);
+    return {items,page,pageSize:5,total:totalRow?.total??0,hasMore:page*5<(totalRow?.total??0)};
+  }
+
+  async findCleanerHistory(cleanerId:string,page:number){
+    const condition=and(eq(orders.cleanerId,cleanerId),inArray(orders.status,cleanerHistoryStatuses));
+    const [totalRow]=await db.select({total:count()}).from(orders).where(condition);
+    const items=await db.select({id:orders.id,cleaningType:orders.cleaningType,area:orders.area,status:orders.status,price:orders.price,createdAt:orders.createdAt,completionSubmittedAt:orders.completionSubmittedAt,clientConfirmedAt:orders.clientConfirmedAt,rating:orders.rating}).from(orders).where(condition).orderBy(desc(orders.createdAt),desc(orders.id)).limit(5).offset((page-1)*5);
+    return {items,page,pageSize:5,total:totalRow?.total??0,hasMore:page*5<(totalRow?.total??0)};
+  }
+
+  async findCleanerHistoryDetail(cleanerId:string,orderId:string){
+    // No client phone, identity, exact address or coordinates in historical views.
+    const [item]=await db.select({id:orders.id,cleaningType:orders.cleaningType,area:orders.area,status:orders.status,price:orders.price,createdAt:orders.createdAt,completionSubmittedAt:orders.completionSubmittedAt,clientConfirmedAt:orders.clientConfirmedAt,inspectionMethod:orders.inspectionMethod,completionPhotos:orders.completionPhotos,rating:orders.rating,reviewText:orders.reviewText}).from(orders).where(and(eq(orders.id,orderId),eq(orders.cleanerId,cleanerId),inArray(orders.status,cleanerHistoryStatuses))).limit(1);
+    return item??null;
   }
 
   async findOneForClient(orderId: string, clientId: string) {
