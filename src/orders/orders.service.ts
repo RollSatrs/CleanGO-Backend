@@ -446,7 +446,8 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
           eq(orderOffers.status, "offered"), lte(orderOffers.expiresAt, now)));
 
       // Never re-offer to a cleaner who declined or previously timed out.
-      const previouslyOffered = new Set(existing.map(offer => offer.cleanerId));
+      // Revoked proposals (not declined/expired/released) may be offered again on replacement.
+      const previouslyOffered = new Set(existing.filter(offer=>offer.status!=="revoked").map(offer => offer.cleanerId));
       const selected = selectOfferBatch(ranked, previouslyOffered, 3);
       if (!selected.length) return { offered: 0, reason: "no_more_eligible_cleaners" };
 
@@ -456,7 +457,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
       await tx.insert(orderOffers).values(selected.map(candidate => ({
         orderId, cleanerId: candidate.cleanerId, batchNumber: round,
         status: "offered", expiresAt,
-      })));
+      }))).onConflictDoUpdate({target:[orderOffers.orderId,orderOffers.cleanerId],set:{batchNumber:round,status:"offered",expiresAt,respondedAt:null,createdAt:now},setWhere:eq(orderOffers.status,"revoked")});
       await tx.update(orders).set({
         matchingRound: round,
         matchingStartedAt: current.matchingStartedAt ?? now,
