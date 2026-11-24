@@ -1,5 +1,5 @@
 import { vi, expect, it, describe, beforeEach } from 'vitest';
-import { ForbiddenException, BadRequestException } from '@nestjs/common';
+import { ForbiddenException, BadRequestException, NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { OrdersController } from './orders.controller.js';
 import { OrdersService } from './orders.service.js';
@@ -15,6 +15,9 @@ describe('OrdersController', () => {
     findActiveOffers: vi.fn(),
     findByUserId: vi.fn(),
     findCleanerJobs: vi.fn(),
+    findMinePage:vi.fn(),
+    findCleanerHistory:vi.fn(),
+    findCleanerHistoryDetail:vi.fn(),
     startCleaning: vi.fn(),
     completeCleaning: vi.fn(),
     leaveReview: vi.fn(),
@@ -99,4 +102,32 @@ describe('OrdersController', () => {
     expect(ordersServiceMock.accept).not.toHaveBeenCalled();
     expect(ordersServiceMock.decline).not.toHaveBeenCalled();
   });
+
+  it("scopes cleaner history and detail to the authenticated cleaner", async()=>{
+    const request={user:{id:"cleaner-1",role:"cleaner",phoneVerifiedAt:new Date()}};
+    ordersServiceMock.findCleanerHistory.mockResolvedValue({items:[],total:0});
+    ordersServiceMock.findCleanerHistoryDetail.mockResolvedValue({id:"job-1",status:"pending_confirmation"});
+    await expect(controller.cleanerHistory(request as never,"2")).resolves.toEqual({items:[],total:0});
+    await expect(controller.cleanerHistoryDetail("job-1",request as never)).resolves.toMatchObject({status:"pending_confirmation"});
+    expect(ordersServiceMock.findCleanerHistory).toHaveBeenCalledWith("cleaner-1",2);
+    expect(ordersServiceMock.findCleanerHistoryDetail).toHaveBeenCalledWith("cleaner-1","job-1");
+    ordersServiceMock.findCleanerHistoryDetail.mockResolvedValue(null);
+    await expect(controller.cleanerHistoryDetail("other-job",request as never)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(controller.cleanerHistory(request as never,"0")).rejects.toBeInstanceOf(BadRequestException);
+    for(const user of [{id:"client-1",role:"client",phoneVerifiedAt:new Date()},{id:"cleaner-2",role:"cleaner",phoneVerifiedAt:null}]){
+      await expect(controller.cleanerHistory({user} as never)).rejects.toBeInstanceOf(ForbiddenException);
+      await expect(controller.cleanerHistoryDetail("job-1",{user} as never)).rejects.toBeInstanceOf(ForbiddenException);
+    }
+  });
+
+  it("validates and scopes client history sections",async()=>{
+    const request={user:{id:"client-1",role:"client",phoneVerifiedAt:new Date()}};
+    ordersServiceMock.findMinePage.mockResolvedValue({items:[],total:0});
+    for(const section of ["active","completed","cancelled","archive"]){
+      await expect(controller.history(request as never,section,"1")).resolves.toEqual({items:[],total:0});
+      expect(ordersServiceMock.findMinePage).toHaveBeenLastCalledWith("client-1",section,1);
+    }
+    await expect(controller.history(request as never,"all","1")).rejects.toBeInstanceOf(BadRequestException);
+  });
+
 });
