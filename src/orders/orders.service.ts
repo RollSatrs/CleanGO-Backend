@@ -143,13 +143,15 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
     if (!profile) return {
       isAvailable: false, effectiveAvailable: false, locationNeedsRefresh: false, serviceRadiusKm: 5,
       serviceTypes: ["regular", "general", "renovation"],
-      hasLocation: false, lastLocationAt: null, availableUntil: null, timeRemainingSeconds: 0, availabilityExpired: false,
+      hasLocation: false, lastLocationAt: null, availableUntil: null, timeRemainingSeconds: 0, availabilityExpired: false, hasActiveOrder: false,
     };
+    const [activeOrder]=await db.select({id:orders.id}).from(orders).where(and(eq(orders.cleanerId,cleanerId),inArray(orders.status,["accepted","en_route","arrived","in_progress"]))).limit(1);
     const hasLocation = profile.latitude != null && profile.longitude != null;
     const availability = availabilityStatus({ optedIn: profile.isAvailable, expiresAt: profile.availableUntil, latitude: profile.latitude, longitude: profile.longitude, lastLocationAt: profile.lastLocationAt });
     return {
       isAvailable: profile.isAvailable,
       ...availability,
+      hasActiveOrder:Boolean(activeOrder),
       availableUntil: profile.availableUntil,
       serviceRadiusKm: profile.serviceRadiusKm ?? 5,
       serviceTypes: profile.serviceTypes ?? [],
@@ -209,6 +211,24 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
     // A newly refreshed/available cleaner can be considered promptly for pending orders.
     // The queue retains its locking and eligibility checks.
     if (input.isAvailable) void this.processMatchingQueue();
+    return this.getCleanerProfile(cleanerId);
+  }
+
+  async updateCleanerPreferences(cleanerId:string,input:{serviceRadiusKm:number;serviceTypes:string[]}){
+    const values={serviceRadiusKm:input.serviceRadiusKm,serviceTypes:input.serviceTypes,updatedAt:new Date()};
+    await db.insert(cleanerProfiles).values({userId:cleanerId,...values}).onConflictDoUpdate({target:cleanerProfiles.userId,set:values});
+    return this.getCleanerProfile(cleanerId);
+  }
+
+  async refreshCleanerLocation(cleanerId:string,input:{latitude:number;longitude:number;availableUntil:string}){
+    const now=new Date();
+    const expiry=new Date(input.availableUntil);
+    if(!Number.isFinite(expiry.getTime())||expiry<=now)throw new ConflictException("Смена закончилась. Включите доступность снова.");
+    if(!Number.isFinite(input.latitude)||!Number.isFinite(input.longitude)||Math.abs(input.latitude)>90||Math.abs(input.longitude)>180)throw new BadRequestException("Некорректная геопозиция");
+    // A delayed request cannot restart, extend or modify another shift.
+    const [updated]=await db.update(cleanerProfiles).set({latitude:String(input.latitude),longitude:String(input.longitude),lastLocationAt:now,updatedAt:now})
+      .where(and(eq(cleanerProfiles.userId,cleanerId),eq(cleanerProfiles.isAvailable,true),eq(cleanerProfiles.availableUntil,expiry),gt(cleanerProfiles.availableUntil,now))).returning({id:cleanerProfiles.userId});
+    if(!updated)throw new ConflictException("Смена изменилась или завершена. Обновите статус.");
     return this.getCleanerProfile(cleanerId);
   }
 
