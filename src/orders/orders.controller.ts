@@ -4,6 +4,7 @@ import {
   Controller,
   Get,
   Param,
+  ParseUUIDPipe,
   Query,
   Patch,
   Post,
@@ -151,6 +152,15 @@ export class OrdersController {
     const order = await this.ordersService.findOneForClient(id, user.id);
     if (!order) throw new NotFoundException("Заказ не найден");
     return order;
+  }
+
+  @Get(":id/counterpart-avatar")
+  async counterpartAvatar(@Param("id",ParseUUIDPipe) id:string,@Req() request:Request) {
+    const user=(request as AuthenticatedRequest).user;
+    if(!user.phoneVerifiedAt||!["client","cleaner"].includes(user.role))throw new ForbiddenException("Требуется подтверждённый профиль");
+    const result=await this.ordersService.getCounterpartAvatar(id,user.id,user.role);
+    if(!result)throw new NotFoundException("Заказ не найден");
+    return result;
   }
 
   @Get(":id/progress")
