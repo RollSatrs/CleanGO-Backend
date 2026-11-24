@@ -13,6 +13,7 @@ import {
 
 import {
   IsIn,
+  ValidateIf,
   IsNotEmpty,
   IsString,
   Matches,
@@ -49,6 +50,23 @@ class VerifyPhoneDto extends PhoneCodeDto {
 class SelectRoleDto {
   @IsIn(["client", "cleaner"])
   role!: "client" | "cleaner";
+}
+
+class UpdateProfileDto {
+  @ValidateIf((_object,value)=>value!==undefined)
+  @IsString()
+  @MaxLength(60)
+  firstName?: string;
+
+  @ValidateIf((_object,value)=>value!==undefined)
+  @IsString()
+  @MaxLength(60)
+  lastName?: string;
+
+  @ValidateIf((_object,value)=>value!==undefined&&value!==null)
+  @IsString()
+  @MaxLength(180000)
+  avatar?: string | null;
 }
 
 @Controller("auth")
@@ -111,6 +129,20 @@ export class AuthController {
       (request as AuthenticatedRequest).user.id,
       body.role,
     );
+  }
+
+  @UseGuards(AuthGuard)
+  @Get("profile")
+  getProfile(@Req() request:Request) {
+    return this.authService.getProfile((request as AuthenticatedRequest).user.id);
+  }
+
+  @UseGuards(AuthGuard)
+  @Patch("profile")
+  updateProfile(@Req() request:Request,@Body() body:UpdateProfileDto) {
+    const user=(request as AuthenticatedRequest).user;
+    if(!user.phoneVerifiedAt||!["client","cleaner"].includes(user.role))throw new ForbiddenException("Подтвердите телефон и выберите роль");
+    return this.authService.updateProfile(user.id,body);
   }
 
   @UseGuards(AuthGuard)
