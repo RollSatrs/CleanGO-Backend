@@ -16,7 +16,7 @@ import {
 } from "@nestjs/common";
 
 import type { Request } from "express";
-import { IsArray, IsBoolean, IsIn, IsInt, IsNumber, IsOptional, Max, Min, ArrayNotEmpty, ArrayUnique } from "class-validator";
+import { IsArray, IsBoolean, IsIn, IsInt, IsNumber, IsOptional, IsISO8601, Max, Min, ArrayNotEmpty, ArrayUnique } from "class-validator";
 
 import { clientHistorySections, type ClientHistorySection } from "./order-history.js";
 import { OrdersService } from "./orders.service.js";
@@ -59,6 +59,16 @@ class CleanerProfileDto {
   longitude?: number;
 }
 
+class CleanerPreferencesDto {
+  @IsInt() @Min(1) @Max(30) serviceRadiusKm!:number;
+  @IsArray() @ArrayNotEmpty() @ArrayUnique() @IsIn(["regular","general","renovation"],{each:true}) serviceTypes!:string[];
+}
+class CleanerLocationDto {
+  @IsNumber() @Min(-90) @Max(90) latitude!:number;
+  @IsNumber() @Min(-180) @Max(180) longitude!:number;
+  @IsISO8601({strict:true}) availableUntil!:string;
+}
+
 @Controller("orders")
 @UseGuards(AuthGuard)
 export class OrdersController {
@@ -94,6 +104,19 @@ export class OrdersController {
       throw new BadRequestException("Доступность можно включить на 1, 2 или 4 часа");
     }
     return this.ordersService.updateCleanerProfile(user.id, body);
+  }
+
+  @Patch("cleaner/preferences")
+  async cleanerPreferences(@Req() request:Request,@Body() body:CleanerPreferencesDto){
+    const user=(request as AuthenticatedRequest).user;
+    if(user.role!=="cleaner"||!user.phoneVerifiedAt)throw new ForbiddenException("Требуется подтверждённый профиль клинера");
+    return this.ordersService.updateCleanerPreferences(user.id,body);
+  }
+  @Patch("cleaner/location")
+  async cleanerLocation(@Req() request:Request,@Body() body:CleanerLocationDto){
+    const user=(request as AuthenticatedRequest).user;
+    if(user.role!=="cleaner"||!user.phoneVerifiedAt)throw new ForbiddenException("Требуется подтверждённый профиль клинера");
+    return this.ordersService.refreshCleanerLocation(user.id,body);
   }
 
   @Post()
