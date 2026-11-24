@@ -15,7 +15,8 @@ import { SignJWT, jwtVerify } from "jose";
 import { and, eq } from "drizzle-orm";
 
 import { db } from "../db/index.js";
-import { users } from "../db/schema.js";
+import { users, userAvatars, orders } from "../db/schema.js";
+import { validateAvatar, validateProfileName } from "./profile-validation.js";
 
 export type AuthUser = {
   id: string;
@@ -441,6 +442,32 @@ export class AuthService {
   // ==========================================
   // SELECT ROLE
   // ==========================================
+
+  async getProfile(userId: string) {
+    const [user] = await db.select().from(users).where(eq(users.id,userId)).limit(1);
+    if(!user)throw new UnauthorizedException("Пользователь не найден");
+    const [avatar]=await db.select({image:userAvatars.image}).from(userAvatars).where(eq(userAvatars.userId,userId)).limit(1);
+    let reputation: { completedOrders:number; reviewCount:number; rating:number|null } | null = null;
+    if(user.role==="cleaner"){
+      const rows=await db.select({rating:orders.rating}).from(orders).where(and(eq(orders.cleanerId,userId),eq(orders.status,"completed")));
+      const ratings=rows.flatMap(row=>row.rating==null?[]:[Number(row.rating)]);
+      reputation={completedOrders:rows.length,reviewCount:ratings.length,rating:ratings.length?Number((ratings.reduce((a,b)=>a+b,0)/ratings.length).toFixed(2)):null};
+    }
+    return {...this.toPublicUser(user),avatar:avatar?.image??null,reputation};
+  }
+
+  async updateProfile(userId: string, input: {firstName?:string;lastName?:string;avatar?:string|null}) {
+    const patch: {firstName?:string|null;lastName?:string|null}={};
+    if(input.firstName!==undefined)patch.firstName=validateProfileName(input.firstName);
+    if(input.lastName!==undefined)patch.lastName=validateProfileName(input.lastName,true);
+    const avatar=input.avatar===undefined?undefined:validateAvatar(input.avatar);
+    await db.transaction(async tx=>{
+      if(Object.keys(patch).length)await tx.update(users).set(patch).where(eq(users.id,userId));
+      if(avatar===null)await tx.delete(userAvatars).where(eq(userAvatars.userId,userId));
+      else if(avatar!==undefined)await tx.insert(userAvatars).values({userId,image:avatar}).onConflictDoUpdate({target:userAvatars.userId,set:{image:avatar,updatedAt:new Date()}});
+    });
+    return this.getProfile(userId);
+  }
 
   async selectRole(userId: string, role: "client" | "cleaner") {
     // Atomic conditional update prevents overwriting a previously selected role.
