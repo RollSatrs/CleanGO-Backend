@@ -15,6 +15,8 @@ describe('OrdersController', () => {
     findActiveOffers: vi.fn(),
     findByUserId: vi.fn(),
     findCleanerJobs: vi.fn(),
+    updateCleanerPreferences:vi.fn(),
+    refreshCleanerLocation:vi.fn(),
     findMinePage:vi.fn(),
     findCleanerHistory:vi.fn(),
     findCleanerHistoryDetail:vi.fn(),
@@ -128,6 +130,21 @@ describe('OrdersController', () => {
       expect(ordersServiceMock.findMinePage).toHaveBeenLastCalledWith("client-1",section,1);
     }
     await expect(controller.history(request as never,"all","1")).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it("scopes cleaner preferences and location updates to verified cleaner",async()=>{
+    const request={user:{id:"cleaner-1",role:"cleaner",phoneVerifiedAt:new Date()}};
+    const prefs={serviceRadiusKm:5,serviceTypes:["general"]};
+    const coords={latitude:50.4,longitude:80.2,availableUntil:"2026-11-25T00:00:00.000Z"};
+    await controller.cleanerPreferences(request as never,prefs);
+    await controller.cleanerLocation(request as never,coords);
+    expect(ordersServiceMock.updateCleanerPreferences).toHaveBeenCalledWith("cleaner-1",prefs);
+    expect(ordersServiceMock.refreshCleanerLocation).toHaveBeenCalledWith("cleaner-1",coords);
+    for(const user of [{id:"client",role:"client",phoneVerifiedAt:new Date()},{id:"unverified",role:"cleaner",phoneVerifiedAt:null}]){
+      await expect(controller.cleanerPreferences({user} as never,prefs)).rejects.toBeInstanceOf(ForbiddenException);
+      await expect(controller.cleanerLocation({user} as never,coords)).rejects.toBeInstanceOf(ForbiddenException);
+    }
+    expect(ordersServiceMock.refreshCleanerLocation).toHaveBeenCalledTimes(1);
   });
 
 });
