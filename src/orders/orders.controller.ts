@@ -18,6 +18,7 @@ import {
 import type { Request } from "express";
 import { IsArray, IsBoolean, IsIn, IsInt, IsNumber, IsOptional, Max, Min, ArrayNotEmpty, ArrayUnique } from "class-validator";
 
+import { clientHistorySections, type ClientHistorySection } from "./order-history.js";
 import { OrdersService } from "./orders.service.js";
 import { CreateOrderDto } from "./dto/create-order.dto.js";
 
@@ -133,14 +134,14 @@ export class OrdersController {
     if (user.role !== "client" || !user.phoneVerifiedAt) {
       throw new ForbiddenException("История доступна подтверждённому клиенту");
     }
-    if (!["active", "archive"].includes(section) || !/^[1-9]\d*$/.test(pageValue)) {
+    if (!clientHistorySections.includes(section as ClientHistorySection) || !/^[1-9]\d*$/.test(pageValue)) {
       throw new BadRequestException("Некорректные параметры истории");
     }
     const page = Number(pageValue);
     if (!Number.isSafeInteger(page) || page > 100000) {
       throw new BadRequestException("Некорректный номер страницы");
     }
-    return this.ordersService.findMinePage(user.id, section as "active" | "archive", page);
+    return this.ordersService.findMinePage(user.id, section as ClientHistorySection, page);
   }
 
   @Get(":id")
@@ -172,6 +173,24 @@ export class OrdersController {
     const progress = await this.ordersService.getMatchingProgress(id, user.id);
     if (!progress) throw new NotFoundException("Заказ не найден");
     return progress;
+  }
+
+  @Get("cleaner/history")
+  async cleanerHistory(@Req() request:Request,@Query("page") pageValue="1"){
+    const user=(request as AuthenticatedRequest).user;
+    if(user.role!=="cleaner"||!user.phoneVerifiedAt)throw new ForbiddenException("Требуется подтверждённый профиль клинера");
+    const page=Number(pageValue);
+    if(!/^[1-9]\d*$/.test(pageValue)||!Number.isSafeInteger(page)||page>100000)throw new BadRequestException("Некорректный номер страницы");
+    return this.ordersService.findCleanerHistory(user.id,page);
+  }
+
+  @Get("cleaner/history/:id")
+  async cleanerHistoryDetail(@Param("id",ParseUUIDPipe) id:string,@Req() request:Request){
+    const user=(request as AuthenticatedRequest).user;
+    if(user.role!=="cleaner"||!user.phoneVerifiedAt)throw new ForbiddenException("Требуется подтверждённый профиль клинера");
+    const item=await this.ordersService.findCleanerHistoryDetail(user.id,id);
+    if(!item)throw new NotFoundException("Заказ не найден");
+    return item;
   }
 
   @Get("cleaner/jobs")
