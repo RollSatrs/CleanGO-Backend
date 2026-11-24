@@ -51,6 +51,12 @@ export const users = pgTable(
   ],
 );
 
+export const userAvatars = pgTable("user_avatars", {
+  userId: uuid("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
+  image: text("image").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
 // ==========================================
 // ORDERS
 // ==========================================
