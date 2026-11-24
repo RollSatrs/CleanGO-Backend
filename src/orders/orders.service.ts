@@ -1,12 +1,13 @@
 
 import { Injectable, ConflictException, BadRequestException, Logger, OnModuleInit, OnModuleDestroy } from "@nestjs/common";
-import { eq, desc, and, isNull, gt, lte, sql, inArray, notInArray, count } from "drizzle-orm";
+import { eq, desc, and, isNull, gt, gte, lte, sql, inArray, notInArray, count, or } from "drizzle-orm";
 
 import { db } from "../db/index.js";
-import { orders, orderOffers, orderEvents, cleanerProfiles, users, userAvatars } from "../db/schema.js";
+import { orders, orderOffers, orderEvents, cleanerProfiles, users, userAvatars, orderIncidents } from "../db/schema.js";
 import { rankCandidates, selectOfferBatch, type MatchingCandidate } from "./matching-engine.js";
 import { locationIsFresh, availabilityStatus, availabilityExpiresAt, type AvailabilityHours } from "./cleaner-availability.js";
 
+import { allowedException, needsWait, waitElapsed, exceptionReasons, type ExceptionAction, type ExceptionRole } from "./order-exceptions.js";
 import { clientHistoryFilter, cleanerHistoryStatuses, type ClientHistorySection } from "./order-history.js";
 import { PricingService } from "../pricing/pricing.service.js";
 import { CreateOrderDto } from "./dto/create-order.dto.js";
@@ -815,29 +816,65 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
-  async cancelByClient(orderId: string, clientId: string) {
-    return db.transaction(async tx => {
-      const now = new Date();
-      const [cancelled] = await tx.update(orders)
-        .set({ status: "cancelled" })
-        .where(and(
-          eq(orders.id, orderId),
-          eq(orders.userId, clientId),
-          eq(orders.status, "pending"),
-          isNull(orders.cleanerId),
-        ))
-        .returning();
-      if (!cancelled) throw new ConflictException("Отменить можно только свой заказ до принятия клинером");
+  async cancelByClient(orderId:string,clientId:string) {
+    // Legacy entrypoint remains limited to cancellation before assignment.
+    return this.handleOrderException(orderId,clientId,"client",{action:"cancel",reason:"changed_plans",expectedStatus:"pending"});
+  }
 
-      await tx.update(orderOffers)
-        .set({ status: "revoked", respondedAt: now })
-        .where(and(eq(orderOffers.orderId, orderId), eq(orderOffers.status, "offered")));
-
-      await tx.insert(orderEvents).values({
-        orderId, actorId: clientId, eventType: "order_cancelled",
-      });
-      return cancelled;
+  async handleOrderException(orderId:string,actorId:string,role:ExceptionRole,input:{action:ExceptionAction;reason:string;comment?:string;photos?:string[];expectedStatus:string;requestId?:string}){
+    const {action,reason,expectedStatus}=input;
+    const comment=input.comment?.trim()||null;
+    const photos=input.photos??[];
+    if(!exceptionReasons.includes(reason as typeof exceptionReasons[number])||comment&&comment.length>1000||!Array.isArray(photos)||photos.length>3)throw new BadRequestException("Некорректные данные обращения");
+    for(const photo of photos){
+      if(typeof photo!=="string"||photo.length>420000||!/^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/.test(photo))throw new BadRequestException("Фото: JPEG до 300 КБ");
+      const bytes=Buffer.from(photo.slice(23),"base64");if(bytes.length<100||bytes.length>315000||bytes[0]!==255||bytes[1]!==216||bytes[2]!==255)throw new BadRequestException("Некорректная фотография");
+    }
+    if(reason==="other"&&!comment)throw new BadRequestException("Опишите причину");
+    const result=await db.transaction(async tx=>{
+      const [order]=await tx.select().from(orders).where(eq(orders.id,orderId)).for("update");
+      if(!order||(role==="client"?order.userId!==actorId:order.cleanerId!==actorId)){
+        // A retried release may arrive after the old cleaner has been detached.
+        if(input.requestId){const [previous]=await tx.select({id:orderIncidents.id}).from(orderIncidents).where(and(eq(orderIncidents.id,input.requestId),eq(orderIncidents.orderId,orderId),eq(orderIncidents.actorId,actorId),inArray(orderIncidents.kind,action==="release"||action==="replacement"?[action,"released"]:[action]))).limit(1);if(previous)return {status:"recorded",duplicate:true,clientId:null,cleanerId:null};}
+        throw new ConflictException("Заказ недоступен");
+      }
+      if(input.requestId){const [previous]=await tx.select({id:orderIncidents.id}).from(orderIncidents).where(and(eq(orderIncidents.id,input.requestId),eq(orderIncidents.orderId,orderId),eq(orderIncidents.actorId,actorId),eq(orderIncidents.kind,action))).limit(1);if(previous)return {status:order.status,duplicate:true,clientId:null,cleanerId:null};}
+      if(order.status!==expectedStatus||!allowedException(role,order.status,action,reason))throw new ConflictException("Статус заказа изменился. Обновите данные.");
+      const now=new Date();
+      if(role==="cleaner"&&(action==="wait"||needsWait(reason))){
+        const [wait]=await tx.select({createdAt:orderIncidents.createdAt}).from(orderIncidents).where(and(eq(orderIncidents.orderId,orderId),eq(orderIncidents.actorId,actorId),eq(orderIncidents.kind,"wait"),gte(orderIncidents.createdAt,order.acceptedAt??order.createdAt))).orderBy(desc(orderIncidents.createdAt)).limit(1);
+        if(action==="wait"&&wait)return {status:order.status,waitStartedAt:wait.createdAt,duplicate:true,clientId:null,cleanerId:null};
+        if(action!=="wait"&&(order.status!=="arrived"||!waitElapsed(wait?.createdAt??null,now)))throw new ConflictException("Сначала запустите ожидание на 10 минут");
+      }
+      let status=order.status;
+      if(action==="cancel")status="cancelled";
+      if(action==="release")status=needsWait(reason)?"disputed":"replacement_pending";
+      if(action==="replacement")status="pending";
+      if(action==="issue"&&order.status!=="completed")status="disputed";
+      const detach=action==="replacement"||(action==="release"&&status==="replacement_pending");
+      await tx.insert(orderIncidents).values({...(input.requestId?{id:input.requestId}:{}),orderId,actorId,actorRole:role,cleanerId:order.cleanerId,kind:detach?"released":action,reason,comment,photos,previousStatus:order.status,createdAt:now});
+      if(status!==order.status){
+        await tx.update(orders).set({status,...(detach?{cleanerId:null,acceptedAt:null,travelMode:null,etaMinutes:null,etaCalculatedAt:null,matchingStartedAt:now}:{}),...(status==="disputed"?{completionIssueAt:now}:{})}).where(eq(orders.id,orderId));
+        await tx.update(orderOffers).set({status:"revoked",respondedAt:now}).where(and(eq(orderOffers.orderId,orderId),eq(orderOffers.status,"offered")));
+        if(detach&&order.cleanerId)await tx.update(orderOffers).set({status:"released",respondedAt:now}).where(and(eq(orderOffers.orderId,orderId),eq(orderOffers.cleanerId,order.cleanerId),eq(orderOffers.status,"accepted")));
+        if(detach||status==="cancelled"||status==="disputed")await tx.insert(orderEvents).values({orderId,actorId,eventType:"trip_location_off"});
+      }
+      await tx.insert(orderEvents).values({orderId,actorId,eventType:action==="wait"?"client_wait_started":status==="cancelled"?"order_cancelled":status==="replacement_pending"?"cleaner_released":action==="replacement"?"replacement_started":"order_issue_reported"});
+      return {status,waitStartedAt:action==="wait"?now:undefined,duplicate:false,clientId:order.userId,cleanerId:order.cleanerId};
     });
+    if(!result.duplicate&&action!=="wait"){
+      const message=result.status==="cancelled"?"Заказ отменён.":result.status==="replacement_pending"?"Исполнитель отказался. Откройте заказ, чтобы подтвердить замену или отменить.":result.status==="pending"?"Начат повторный поиск исполнителя.":"Проблема зарегистрирована для рассмотрения. Финансовые решения не применяются автоматически.";
+      for(const id of [result.clientId,result.cleanerId])if(id&&id!==actorId)void this.notifyTelegram(id,message);
+      if(result.status==="pending")void this.processMatchingQueue();
+    }
+    return {status:result.status,waitStartedAt:"waitStartedAt" in result?result.waitStartedAt:undefined};
+  }
+
+  async getExceptionState(orderId:string,actorId:string,role:ExceptionRole){
+    const [order]=await db.select({id:orders.id,userId:orders.userId,cleanerId:orders.cleanerId,acceptedAt:orders.acceptedAt,status:orders.status}).from(orders).where(eq(orders.id,orderId)).limit(1);
+    if(!order||(role==="client"?order.userId!==actorId:order.cleanerId!==actorId))throw new ConflictException("Заказ недоступен");
+    const [wait]=role==="cleaner"&&order.acceptedAt?await db.select({createdAt:orderIncidents.createdAt}).from(orderIncidents).where(and(eq(orderIncidents.orderId,orderId),eq(orderIncidents.actorId,actorId),eq(orderIncidents.kind,"wait"),gte(orderIncidents.createdAt,order.acceptedAt))).orderBy(desc(orderIncidents.createdAt)).limit(1):[];
+    return {status:order.status,waitStartedAt:wait?.createdAt??null};
   }
 
   async findMinePage(userId: string, section: ClientHistorySection, page: number) {
@@ -849,16 +886,19 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
   }
 
   async findCleanerHistory(cleanerId:string,page:number){
-    const condition=and(eq(orders.cleanerId,cleanerId),inArray(orders.status,cleanerHistoryStatuses));
+    const former=sql`EXISTS (SELECT 1 FROM order_incidents i WHERE i.order_id=${orders.id} AND i.cleaner_id=${cleanerId} AND i.kind='released')`;
+    const current=eq(orders.cleanerId,cleanerId);
+    const condition=or(and(current,inArray(orders.status,cleanerHistoryStatuses)),former);
     const [totalRow]=await db.select({total:count()}).from(orders).where(condition);
-    const items=await db.select({id:orders.id,cleaningType:orders.cleaningType,area:orders.area,status:orders.status,price:orders.price,createdAt:orders.createdAt,completionSubmittedAt:orders.completionSubmittedAt,clientConfirmedAt:orders.clientConfirmedAt,rating:orders.rating}).from(orders).where(condition).orderBy(desc(orders.createdAt),desc(orders.id)).limit(5).offset((page-1)*5);
+    const items=await db.select({id:orders.id,cleaningType:orders.cleaningType,area:orders.area,status:sql<string>`CASE WHEN ${current} THEN ${orders.status} ELSE 'released' END`,price:orders.price,createdAt:orders.createdAt,completionSubmittedAt:sql<Date|null>`CASE WHEN ${current} THEN ${orders.completionSubmittedAt} END`,clientConfirmedAt:sql<Date|null>`CASE WHEN ${current} THEN ${orders.clientConfirmedAt} END`,rating:sql<number|null>`CASE WHEN ${current} THEN ${orders.rating} END`}).from(orders).where(condition).orderBy(desc(orders.createdAt),desc(orders.id)).limit(5).offset((page-1)*5);
     return {items,page,pageSize:5,total:totalRow?.total??0,hasMore:page*5<(totalRow?.total??0)};
   }
 
   async findCleanerHistoryDetail(cleanerId:string,orderId:string){
-    // No client phone, identity, exact address or coordinates in historical views.
     const [item]=await db.select({id:orders.id,cleaningType:orders.cleaningType,area:orders.area,status:orders.status,price:orders.price,createdAt:orders.createdAt,completionSubmittedAt:orders.completionSubmittedAt,clientConfirmedAt:orders.clientConfirmedAt,inspectionMethod:orders.inspectionMethod,completionPhotos:orders.completionPhotos,rating:orders.rating,reviewText:orders.reviewText}).from(orders).where(and(eq(orders.id,orderId),eq(orders.cleanerId,cleanerId),inArray(orders.status,cleanerHistoryStatuses))).limit(1);
-    return item??null;
+    if(item)return item;
+    const [former]=await db.select({id:orders.id,cleaningType:orders.cleaningType,area:orders.area,price:orders.price,createdAt:orders.createdAt}).from(orders).where(and(eq(orders.id,orderId),sql`EXISTS (SELECT 1 FROM order_incidents i WHERE i.order_id=${orders.id} AND i.cleaner_id=${cleanerId} AND i.kind='released')`)).limit(1);
+    return former?{...former,status:"released"}:null;
   }
 
   async findOneForClient(orderId: string, clientId: string) {
