@@ -634,13 +634,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
   }
 
   async reportCompletionIssue(orderId:string,clientId:string) {
-    await db.transaction(async tx=>{
-      const [updated] = await tx.update(orders).set({status:"disputed",completionIssueAt:new Date()})
-        .where(and(eq(orders.id,orderId),eq(orders.userId,clientId),eq(orders.status,"pending_confirmation"))).returning({id:orders.id});
-      if(!updated)throw new ConflictException("Обращение возможно во время ожидания подтверждения");
-      await tx.insert(orderEvents).values({orderId,actorId:clientId,eventType:"completion_issue_reported"});
-    });
-    return {status:"disputed",message:"Обращение зарегистрировано для рассмотрения поддержкой. Автоматической выплаты нет."};
+    return this.handleOrderException(orderId,clientId,"client",{action:"issue",reason:"quality",expectedStatus:"pending_confirmation"});
   }
 
   async leaveReview(orderId:string,clientId:string,rating:number,reviewText?:string) {
@@ -665,6 +659,8 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
   }
 
   async completeCleaning(orderId: string, cleanerId: string, photos: string[] = []) {
+    const [already]=await db.select().from(orders).where(and(eq(orders.id,orderId),eq(orders.cleanerId,cleanerId),inArray(orders.status,["pending_confirmation","completed","disputed"]))).limit(1);
+    if(already?.completionSubmittedAt)return already;
     // Store small private photo reports in PostgreSQL for MVP. No public image URLs.
     if (!Array.isArray(photos)) throw new BadRequestException("Некорректные фотографии");
     for(const photo of photos) {
@@ -838,7 +834,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
         if(input.requestId){const [previous]=await tx.select({id:orderIncidents.id}).from(orderIncidents).where(and(eq(orderIncidents.id,input.requestId),eq(orderIncidents.orderId,orderId),eq(orderIncidents.actorId,actorId),inArray(orderIncidents.kind,action==="release"||action==="replacement"?[action,"released"]:[action]))).limit(1);if(previous)return {status:"recorded",duplicate:true,clientId:null,cleanerId:null};}
         throw new ConflictException("Заказ недоступен");
       }
-      if(input.requestId){const [previous]=await tx.select({id:orderIncidents.id}).from(orderIncidents).where(and(eq(orderIncidents.id,input.requestId),eq(orderIncidents.orderId,orderId),eq(orderIncidents.actorId,actorId),eq(orderIncidents.kind,action))).limit(1);if(previous)return {status:order.status,duplicate:true,clientId:null,cleanerId:null};}
+      if(input.requestId){const [previous]=await tx.select({id:orderIncidents.id}).from(orderIncidents).where(and(eq(orderIncidents.id,input.requestId),eq(orderIncidents.orderId,orderId),eq(orderIncidents.actorId,actorId),inArray(orderIncidents.kind,action==="release"||action==="replacement"?[action,"released"]:[action]))).limit(1);if(previous)return {status:order.status,duplicate:true,clientId:null,cleanerId:null};}
       if(order.status!==expectedStatus||!allowedException(role,order.status,action,reason))throw new ConflictException("Статус заказа изменился. Обновите данные.");
       const now=new Date();
       if(role==="cleaner"&&(action==="wait"||needsWait(reason))){
