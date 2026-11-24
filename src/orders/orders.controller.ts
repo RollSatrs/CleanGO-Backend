@@ -16,8 +16,9 @@ import {
 } from "@nestjs/common";
 
 import type { Request } from "express";
-import { IsArray, IsBoolean, IsIn, IsInt, IsNumber, IsOptional, IsISO8601, Max, Min, ArrayNotEmpty, ArrayUnique } from "class-validator";
+import { IsArray, IsBoolean, IsIn, IsInt, IsNumber, IsOptional, IsISO8601, IsString, IsUUID, MaxLength, ArrayMaxSize, Max, Min, ArrayNotEmpty, ArrayUnique } from "class-validator";
 
+import { exceptionActions, exceptionReasons, type ExceptionAction } from "./order-exceptions.js";
 import { clientHistorySections, type ClientHistorySection } from "./order-history.js";
 import { OrdersService } from "./orders.service.js";
 import { CreateOrderDto } from "./dto/create-order.dto.js";
@@ -67,6 +68,15 @@ class CleanerLocationDto {
   @IsNumber() @Min(-90) @Max(90) latitude!:number;
   @IsNumber() @Min(-180) @Max(180) longitude!:number;
   @IsISO8601({strict:true}) availableUntil!:string;
+}
+
+class OrderExceptionDto {
+ @IsIn(exceptionActions) action!:ExceptionAction;
+ @IsIn(exceptionReasons) reason!:string;
+ @IsString() @MaxLength(32) expectedStatus!:string;
+ @IsUUID() requestId!:string;
+ @IsOptional() @IsString() @MaxLength(1000) comment?:string;
+ @IsOptional() @IsArray() @ArrayMaxSize(3) @IsString({each:true}) photos?:string[];
 }
 
 @Controller("orders")
@@ -145,6 +155,19 @@ export class OrdersController {
       throw new ForbiddenException("Отмена доступна только подтверждённому клиенту");
     }
     return this.ordersService.cancelByClient(id, user.id);
+  }
+
+  @Get(":id/exception")
+  async exceptionState(@Param("id",ParseUUIDPipe) id:string,@Req() request:Request){
+    const user=(request as AuthenticatedRequest).user;
+    if(!user.phoneVerifiedAt||!["client","cleaner"].includes(user.role))throw new ForbiddenException("Требуется подтверждённый профиль");
+    return this.ordersService.getExceptionState(id,user.id,user.role as "client"|"cleaner");
+  }
+  @Post(":id/exception")
+  async orderException(@Param("id",ParseUUIDPipe) id:string,@Req() request:Request,@Body() body:OrderExceptionDto){
+    const user=(request as AuthenticatedRequest).user;
+    if(!user.phoneVerifiedAt||!["client","cleaner"].includes(user.role))throw new ForbiddenException("Требуется подтверждённый профиль");
+    return this.ordersService.handleOrderException(id,user.id,user.role as "client"|"cleaner",body);
   }
 
   @Get("history")
