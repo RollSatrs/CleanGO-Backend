@@ -275,7 +275,13 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
    */
   async accept(orderId: string, cleanerId: string) {
     return db.transaction(async (tx) => {
+      // Lock this cleaner's profile before assigning an order, including when
+      // they tap different offers at the same time or end their shift.
+      const [profile]=await tx.select().from(cleanerProfiles).where(eq(cleanerProfiles.userId,cleanerId)).for("update");
       const now = new Date();
+      if(!profile||!availabilityStatus({optedIn:profile.isAvailable,expiresAt:profile.availableUntil,latitude:profile.latitude,longitude:profile.longitude,lastLocationAt:profile.lastLocationAt},now).effectiveAvailable)throw new ConflictException("Выйдите на линию и обновите геопозицию");
+      const [busy]=await tx.select({id:orders.id}).from(orders).where(and(eq(orders.cleanerId,cleanerId),inArray(orders.status,["accepted","en_route","arrived","in_progress"]))).limit(1);
+      if(busy)throw new ConflictException("У вас уже есть активный заказ");
       const [accepted] = await tx.update(orders)
         .set({ cleanerId, acceptedAt: now, status: "accepted" })
         .where(and(
@@ -752,6 +758,8 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
    * full address, exact coordinates, apartment, or client identity.
    */
   async findActiveOffers(cleanerId: string) {
+    const profile=await this.getCleanerProfile(cleanerId);
+    if(!profile.effectiveAvailable||profile.hasActiveOrder)return [];
     const now = new Date();
     return db.select({
       offerId: orderOffers.id,
