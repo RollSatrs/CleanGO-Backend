@@ -162,3 +162,17 @@ export const orderEvents = pgTable("order_events", {
 }, (table) => [
   index("order_events_order_created_idx").on(table.orderId, table.createdAt),
 ]);
+
+export const orderIncidents=pgTable("order_incidents",{
+ id:uuid("id").defaultRandom().primaryKey(),
+ orderId:uuid("order_id").notNull().references(()=>orders.id),
+ actorId:uuid("actor_id").notNull().references(()=>users.id),
+ actorRole:text("actor_role").notNull(),
+ cleanerId:uuid("cleaner_id").references(()=>users.id),
+ kind:text("kind").notNull(),
+ reason:text("reason").notNull(),
+ comment:text("comment"),
+ photos:text("photos").array(),
+ previousStatus:text("previous_status").notNull(),
+ createdAt:timestamp("created_at",{withTimezone:true}).defaultNow().notNull(),
+},t=>[index("order_incidents_order_created_idx").on(t.orderId,t.createdAt),index("order_incidents_cleaner_kind_idx").on(t.cleanerId,t.kind)]);
