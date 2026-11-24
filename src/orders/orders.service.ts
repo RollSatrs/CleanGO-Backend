@@ -3,7 +3,7 @@ import { Injectable, ConflictException, BadRequestException, Logger, OnModuleIni
 import { eq, desc, and, isNull, gt, lte, sql, inArray, count } from "drizzle-orm";
 
 import { db } from "../db/index.js";
-import { orders, orderOffers, orderEvents, cleanerProfiles, users } from "../db/schema.js";
+import { orders, orderOffers, orderEvents, cleanerProfiles, users, userAvatars } from "../db/schema.js";
 import { rankCandidates, selectOfferBatch, type MatchingCandidate } from "./matching-engine.js";
 import { locationIsFresh, availabilityStatus, availabilityExpiresAt, type AvailabilityHours } from "./cleaner-availability.js";
 
@@ -671,6 +671,17 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** Client-visible aggregate counts, never identities or coordinates of candidate cleaners. */
+  async getCounterpartAvatar(orderId:string,userId:string,role:string) {
+    const [order]=await db.select({clientId:orders.userId,cleanerId:orders.cleanerId,status:orders.status})
+      .from(orders).where(eq(orders.id,orderId)).limit(1);
+    const active=["accepted","en_route","arrived","in_progress","pending_confirmation"];
+    if(!order||!active.includes(order.status))return null;
+    const counterpart=role==="client"&&order.clientId===userId?order.cleanerId:role==="cleaner"&&order.cleanerId===userId?order.clientId:null;
+    if(!counterpart)return null;
+    const [avatar]=await db.select({image:userAvatars.image}).from(userAvatars).where(eq(userAvatars.userId,counterpart)).limit(1);
+    return {avatar:avatar?.image??null};
+  }
+
   async getMatchingProgress(orderId: string, clientId: string) {
     const [order] = await db.select({ id: orders.id, status: orders.status, cleanerId: orders.cleanerId, travelMode:orders.travelMode, etaMinutes:orders.etaMinutes, etaCalculatedAt:orders.etaCalculatedAt })
       .from(orders).where(and(eq(orders.id, orderId), eq(orders.userId, clientId))).limit(1);
