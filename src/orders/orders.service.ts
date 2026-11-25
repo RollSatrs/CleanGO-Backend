@@ -7,6 +7,8 @@ import { orders, orderOffers, orderEvents, cleanerProfiles, users, userAvatars, 
 import { rankCandidates, selectOfferBatch, type MatchingCandidate } from "./matching-engine.js";
 import { locationIsFresh, availabilityStatus, availabilityExpiresAt, type AvailabilityHours } from "./cleaner-availability.js";
 
+import { validRating, normalizedReview, matchingRating, reviewReportReasons } from "./review-rules.js";
+import { publicReputation } from "./reputation.js";
 import { allowedException, needsWait, waitElapsed, exceptionReasons, type ExceptionAction, type ExceptionRole } from "./order-exceptions.js";
 import { clientHistoryFilter, cleanerHistoryStatuses, type ClientHistorySection } from "./order-history.js";
 import { PricingService } from "../pricing/pricing.service.js";
@@ -370,7 +372,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
     // Reputation uses only confirmed, completed jobs. Bayesian smoothing prevents
     // a single five-star review from outranking experienced cleaners by default.
     const completedRatings = await db.select({cleanerId:orders.cleanerId,rating:orders.rating})
-      .from(orders).where(and(eq(orders.status,"completed"),sql`${orders.rating} IS NOT NULL`));
+      .from(orders).where(and(eq(orders.status,"completed"),eq(orders.reviewVisibility,"published"),sql`${orders.rating} IS NOT NULL`));
     const reputation = new Map<string,{count:number;sum:number}>();
     for(const item of completedRatings) {
       if(!item.cleanerId || item.rating==null)continue;
@@ -402,7 +404,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
         supportsCleaningType: profile.serviceTypes?.includes(order.cleaningType) === true,
         servesArea,
         // Prior 4.2 with weight 5 keeps new cleaners eligible and reduces one-review bias.
-        rating: (()=>{const stat=reputation.get(profile.cleanerId);return stat?(stat.sum+4.2*5)/(stat.count+5):4.2;})(),
+        rating: (()=>{const stat=reputation.get(profile.cleanerId);return matchingRating(stat?.sum??0,stat?.count??0);})(),
         reviewCount:reputation.get(profile.cleanerId)?.count??0,
       };
     });
@@ -639,24 +641,37 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
   }
 
   async leaveReview(orderId:string,clientId:string,rating:number,reviewText?:string) {
-    if(!Number.isFinite(rating)||rating<0.5||rating>5||!Number.isInteger(rating*2))throw new BadRequestException("Оценка от 0,5 до 5 с шагом 0,5");
-    if(reviewText && reviewText.length>1000)throw new BadRequestException("Отзыв слишком длинный");
-    await db.transaction(async tx=>{
-      const [updated] = await tx.update(orders).set({rating,reviewText:reviewText?.trim()||null,reviewedAt:new Date()})
-        .where(and(eq(orders.id,orderId),eq(orders.userId,clientId),eq(orders.status,"completed"),isNull(orders.reviewedAt))).returning({id:orders.id});
-      if(!updated)throw new ConflictException("Отзыв уже оставлен или заказ не завершён");
+    if(!validRating(rating))throw new BadRequestException("Оценка от 0,5 до 5 с шагом 0,5");
+    let text:string|null;
+    try{text=normalizedReview(reviewText);}catch{throw new BadRequestException("Отзыв должен содержать до 1000 символов");}
+    return db.transaction(async tx=>{
+      const [order]=await tx.select().from(orders).where(and(eq(orders.id,orderId),eq(orders.userId,clientId))).for("update");
+      if(!order||order.status!=="completed"||!order.cleanerId)throw new ConflictException("Отзыв доступен только по своему завершённому заказу");
+      if(order.reviewedAt||order.rating!=null){
+        if(order.rating===rating&&order.reviewText===text)return {rating,reviewText:text};
+        throw new ConflictException("Отзыв уже оставлен");
+      }
+      await tx.update(orders).set({rating,reviewText:text,reviewedAt:new Date(),reviewVisibility:"published"}).where(eq(orders.id,orderId));
       await tx.insert(orderEvents).values({orderId,actorId:clientId,eventType:"review_submitted"});
+      return {rating,reviewText:text};
     });
-    return {rating,reviewText:reviewText?.trim()||null};
   }
 
   async cleanerReputation(cleanerId:string) {
-    const rows = await db.select({rating:orders.rating,reviewText:orders.reviewText,reviewedAt:orders.reviewedAt})
-      .from(orders).where(and(eq(orders.cleanerId,cleanerId),eq(orders.status,"completed")));
-    const reviews=rows.filter(x=>x.rating!=null);
-    return {completedOrders:rows.length,reviewCount:reviews.length,
-      rating:reviews.length?Number((reviews.reduce((s,x)=>s+(x.rating??0),0)/reviews.length).toFixed(2)):null,
-      reviews:reviews.filter(x=>x.reviewText).sort((a,b)=>(b.reviewedAt?.getTime()??0)-(a.reviewedAt?.getTime()??0)).slice(0,20)};
+    return publicReputation(cleanerId);
+  }
+
+  async reportReview(orderId:string,cleanerId:string,reason:string,comment?:string){
+    if(!reviewReportReasons.includes(reason as typeof reviewReportReasons[number])||(comment!=null&&(typeof comment!=="string"||comment.length>1000))||(reason==="other"&&!comment?.trim()))throw new BadRequestException("Укажите корректную причину жалобы");
+    return db.transaction(async tx=>{
+      const [order]=await tx.select().from(orders).where(and(eq(orders.id,orderId),eq(orders.cleanerId,cleanerId))).for("update");
+      if(!order||order.status!=="completed"||order.rating==null)throw new ConflictException("Отзыв недоступен");
+      const [existing]=await tx.select({id:orderIncidents.id}).from(orderIncidents).where(and(eq(orderIncidents.orderId,orderId),eq(orderIncidents.actorId,cleanerId),eq(orderIncidents.kind,"review_report"))).limit(1);
+      if(existing)return {reported:true};
+      await tx.insert(orderIncidents).values({orderId,actorId:cleanerId,actorRole:"cleaner",cleanerId,kind:"review_report",reason,comment:comment?.trim()||null,previousStatus:order.status});
+      await tx.insert(orderEvents).values({orderId,actorId:cleanerId,eventType:"review_reported"});
+      return {reported:true};
+    });
   }
 
   async completeCleaning(orderId: string, cleanerId: string, photos: string[] = []) {
@@ -736,7 +751,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
         }
       }
     }
-    return { status: order.status, sent, declined, awaiting, cleaner, tripLocation, travelMode:order.travelMode, etaMinutes:order.etaMinutes, etaCalculatedAt:order.etaCalculatedAt };
+    return { status: order.status, sent, declined, awaiting, cleaner, tripLocation, travelMode:order.travelMode, etaMinutes:order.etaMinutes, etaCalculatedAt:order.etaCalculatedAt, cleanerId:order.cleanerId };
   }
 
   async findCleanerJobs(cleanerId: string) {
@@ -887,12 +902,12 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
     const current=eq(orders.cleanerId,cleanerId);
     const condition=or(and(current,inArray(orders.status,cleanerHistoryStatuses)),former);
     const [totalRow]=await db.select({total:count()}).from(orders).where(condition);
-    const items=await db.select({id:orders.id,cleaningType:orders.cleaningType,area:orders.area,status:sql<string>`CASE WHEN ${current} THEN ${orders.status} ELSE 'released' END`,price:orders.price,createdAt:orders.createdAt,completionSubmittedAt:sql<Date|null>`CASE WHEN ${current} THEN ${orders.completionSubmittedAt} END`,clientConfirmedAt:sql<Date|null>`CASE WHEN ${current} THEN ${orders.clientConfirmedAt} END`,rating:sql<number|null>`CASE WHEN ${current} THEN ${orders.rating} END`}).from(orders).where(condition).orderBy(desc(orders.createdAt),desc(orders.id)).limit(5).offset((page-1)*5);
+    const items=await db.select({id:orders.id,cleaningType:orders.cleaningType,area:orders.area,status:sql<string>`CASE WHEN ${current} THEN ${orders.status} ELSE 'released' END`,price:orders.price,createdAt:orders.createdAt,completionSubmittedAt:sql<Date|null>`CASE WHEN ${current} THEN ${orders.completionSubmittedAt} END`,clientConfirmedAt:sql<Date|null>`CASE WHEN ${current} THEN ${orders.clientConfirmedAt} END`,rating:sql<number|null>`CASE WHEN ${current} AND ${orders.reviewVisibility}=\'published\' THEN ${orders.rating} END`}).from(orders).where(condition).orderBy(desc(orders.createdAt),desc(orders.id)).limit(5).offset((page-1)*5);
     return {items,page,pageSize:5,total:totalRow?.total??0,hasMore:page*5<(totalRow?.total??0)};
   }
 
   async findCleanerHistoryDetail(cleanerId:string,orderId:string){
-    const [item]=await db.select({id:orders.id,cleaningType:orders.cleaningType,area:orders.area,status:orders.status,price:orders.price,createdAt:orders.createdAt,completionSubmittedAt:orders.completionSubmittedAt,clientConfirmedAt:orders.clientConfirmedAt,inspectionMethod:orders.inspectionMethod,completionPhotos:orders.completionPhotos,rating:orders.rating,reviewText:orders.reviewText}).from(orders).where(and(eq(orders.id,orderId),eq(orders.cleanerId,cleanerId),inArray(orders.status,cleanerHistoryStatuses))).limit(1);
+    const [item]=await db.select({id:orders.id,cleaningType:orders.cleaningType,area:orders.area,status:orders.status,price:orders.price,createdAt:orders.createdAt,completionSubmittedAt:orders.completionSubmittedAt,clientConfirmedAt:orders.clientConfirmedAt,inspectionMethod:orders.inspectionMethod,completionPhotos:orders.completionPhotos,rating:sql<number|null>`CASE WHEN ${orders.reviewVisibility}=\'published\' THEN ${orders.rating} END`,reviewText:sql<string|null>`CASE WHEN ${orders.reviewVisibility}=\'published\' THEN ${orders.reviewText} END`,reviewVisibility:orders.reviewVisibility,reviewReported:sql<boolean>`EXISTS (SELECT 1 FROM order_incidents i WHERE i.order_id=${orders.id} AND i.actor_id=${cleanerId} AND i.kind=\'review_report\')`}).from(orders).where(and(eq(orders.id,orderId),eq(orders.cleanerId,cleanerId),inArray(orders.status,cleanerHistoryStatuses))).limit(1);
     if(item)return item;
     const [former]=await db.select({id:orders.id,cleaningType:orders.cleaningType,area:orders.area,price:orders.price,createdAt:orders.createdAt}).from(orders).where(and(eq(orders.id,orderId),sql`EXISTS (SELECT 1 FROM order_incidents i WHERE i.order_id=${orders.id} AND i.cleaner_id=${cleanerId} AND i.kind='released')`)).limit(1);
     return former?{...former,status:"released"}:null;
