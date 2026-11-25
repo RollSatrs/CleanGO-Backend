@@ -15,7 +15,8 @@ import { SignJWT, jwtVerify } from "jose";
 import { and, eq } from "drizzle-orm";
 
 import { db } from "../db/index.js";
-import { users, userAvatars, orders } from "../db/schema.js";
+import { reputationSummary } from "../orders/reputation.js";
+import { users, userAvatars } from "../db/schema.js";
 import { validateAvatar, validateProfileName } from "./profile-validation.js";
 
 export type AuthUser = {
@@ -447,12 +448,7 @@ export class AuthService {
     const [user] = await db.select().from(users).where(eq(users.id,userId)).limit(1);
     if(!user)throw new UnauthorizedException("Пользователь не найден");
     const [avatar]=await db.select({image:userAvatars.image}).from(userAvatars).where(eq(userAvatars.userId,userId)).limit(1);
-    let reputation: { completedOrders:number; reviewCount:number; rating:number|null } | null = null;
-    if(user.role==="cleaner"){
-      const rows=await db.select({rating:orders.rating}).from(orders).where(and(eq(orders.cleanerId,userId),eq(orders.status,"completed")));
-      const ratings=rows.flatMap(row=>row.rating==null?[]:[Number(row.rating)]);
-      reputation={completedOrders:rows.length,reviewCount:ratings.length,rating:ratings.length?Number((ratings.reduce((a,b)=>a+b,0)/ratings.length).toFixed(2)):null};
-    }
+    const reputation=user.role==="cleaner"?await reputationSummary(userId):null;
     return {...this.toPublicUser(user),avatar:avatar?.image??null,reputation};
   }
 
