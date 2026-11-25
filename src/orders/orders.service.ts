@@ -50,63 +50,6 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
   }
 
   private readonly logger = new Logger(OrdersService.name);
-  /** Best-effort Telegram notifications. No private address in offer previews. */
-  private async notifyTelegram(userId: string, message: string) {
-    const token = process.env.TELEGRAM_BOT_TOKEN;
-    if (!token) { this.logger.warn("Telegram notifications disabled: TELEGRAM_BOT_TOKEN missing"); return; }
-    try {
-      const [recipient] = await db.select({ telegramId: users.telegramId })
-        .from(users).where(eq(users.id, userId)).limit(1);
-      if (!recipient?.telegramId) { this.logger.warn("Telegram notification skipped: recipient has no Telegram ID"); return; }
-      const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: recipient.telegramId.toString(),
-          text: message,
-          parse_mode: "HTML",
-          reply_markup: {
-            inline_keyboard: [[{
-              text: "📱 Открыть CleanGo",
-              web_app: { url: "https://clean-go-frontend.vercel.app" },
-            }]],
-          },
-        }),
-        signal: AbortSignal.timeout(5000),
-      });
-      if (!response.ok) {
-        const result = await response.json().catch(() => null) as { description?: string } | null;
-        this.logger.warn(`Telegram notification failed (HTTP ${response.status}): ${result?.description ?? "unknown error"}`);
-      }
-    } catch (error) {
-      this.logger.warn("Telegram notification unavailable: " + String(error));
-    }
-  }
-
-  private readonly cleaningLabels: Record<string, string> = {
-    regular: "Поддерживающая",
-    general: "Генеральная",
-    renovation: "После ремонта",
-  };
-
-  private formatOrderNotice(title: string, order: { id: string; cleaningType: string; area: number; price: number | null }, detail: string) {
-    const kind = this.cleaningLabels[order.cleaningType] ?? "Уборка";
-    const price = order.price == null ? "Уточняется" : `${order.price.toLocaleString("ru-RU")} ₸`;
-    return [
-      title,
-      "",
-      `🧹 <b>Услуга:</b> ${kind}`,
-      `📐 <b>Площадь:</b> ${order.area} м²`,
-      `💳 <b>Стоимость:</b> ${price}`,
-      `🆔 <b>Заказ:</b> ${order.id.slice(0, 8)}`,
-      "",
-      detail,
-      "",
-      "Нажмите кнопку ниже, чтобы открыть приложение.",
-    ].join("\n");
-  }
-
-
   constructor(
     private readonly pricingService: PricingService,
   ) {}
@@ -328,7 +271,6 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
         eventType: "order_accepted",
       });
 
-      if(accepted.userId) void this.notifyTelegram(accepted.userId,this.formatOrderNotice("✅ <b>Клинер найден!</b>",accepted,"Исполнитель принял заказ. Следите за его статусом в приложении."));
       return accepted;
     });
   }
@@ -470,9 +412,6 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
       });
       return { offered: selected.length, round, expiresAt, cleanerIds:selected.map(candidate=>candidate.cleanerId) };
     });
-    if("cleanerIds" in result && result.cleanerIds) for(const cleanerId of result.cleanerIds) {
-      void this.notifyTelegram(cleanerId,this.formatOrderNotice("🔔 <b>Новый заказ для вас</b>",order,"⏳ Предложение действует 90 секунд. Заказ одновременно доступен нескольким клинерам — первым принимает тот, кто успеет."));
-    }
     return result;
   }
 
@@ -549,7 +488,6 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
       }).where(and(eq(orders.id,orderId),eq(orders.cleanerId,cleanerId),eq(orders.status,"accepted"))).returning();
       if(!updated)throw new ConflictException("Заказ уже изменён");
       await tx.insert(orderEvents).values({orderId,actorId:cleanerId,eventType:"cleaner_en_route"});
-      if(updated.userId)void this.notifyTelegram(updated.userId,this.formatOrderNotice("🚗 <b>Клинер выехал</b>",updated,"Клинер направляется к вам. Примерное время смотрите в Mini App."));
       return updated;
     });
   }
@@ -564,10 +502,6 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
         .where(and(eq(orders.id,orderId),eq(orders.cleanerId,cleanerId),eq(orders.status,from))).returning();
       if(!updated) throw new ConflictException("Заказ не в нужном статусе или не назначен вам");
       await tx.insert(orderEvents).values({orderId,actorId:cleanerId,eventType});
-      if(updated.userId) {
-        const messages:Record<string,string>={en_route:"Клинер выехал к вам.",arrived:"Клинер сообщил о прибытии."};
-        void this.notifyTelegram(updated.userId,this.formatOrderNotice(to === "en_route" ? "🚗 <b>Клинер выехал</b>" : "📍 <b>Клинер прибыл</b>",updated,messages[to]??"Статус заказа обновлён."));
-      }
       return updated;
     });
   }
@@ -580,7 +514,6 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
         .returning();
       if (!updated) throw new ConflictException("Заказ не назначен вам или уже начат");
       await tx.insert(orderEvents).values({ orderId, actorId: cleanerId, eventType: "cleaning_started" });
-      if(updated.userId)void this.notifyTelegram(updated.userId,this.formatOrderNotice("🧽 <b>Уборка началась</b>",updated,"Исполнитель приступил к работе."));
       return updated;
     });
   }
@@ -588,29 +521,22 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
 
   /** Send reminders independently of the cleaner. Never auto-confirm or pay an order. */
   private async processCompletionQueue() {
-    const now = new Date();
-    const waiting = await db.select({
-      id: orders.id, userId: orders.userId, submittedAt: orders.completionSubmittedAt,
-      reminderAt: orders.completionReminderAt, escalatedAt: orders.completionEscalatedAt,
-    }).from(orders).where(eq(orders.status, "pending_confirmation")).limit(50);
-    for (const order of waiting) {
-      if (!order.submittedAt || !order.userId) continue;
-      const elapsed = now.getTime() - order.submittedAt.getTime();
-      if (elapsed >= 24 * 60 * 60_000 && !order.escalatedAt) {
-        const [updated] = await db.update(orders).set({completionEscalatedAt: now})
-          .where(and(eq(orders.id, order.id), eq(orders.status,"pending_confirmation"), isNull(orders.completionEscalatedAt))).returning({id:orders.id});
-        if (updated) {
-          await db.insert(orderEvents).values({orderId:order.id,eventType:"completion_support_escalated"});
-          void this.notifyTelegram(order.userId,"⚠️ Подтверждение уборки ожидается более 24 часов. Заказ передан на рассмотрение поддержки CleanGo.");
+    const now=new Date();
+    const waiting=await db.select({id:orders.id}).from(orders).where(and(eq(orders.status,"pending_confirmation"),or(and(isNull(orders.completionEscalatedAt),lte(orders.completionSubmittedAt,new Date(now.getTime()-24*60*60_000))),and(isNull(orders.completionReminderAt),lte(orders.completionSubmittedAt,new Date(now.getTime()-15*60_000)))))).limit(50);
+    for(const {id} of waiting){
+      await db.transaction(async tx=>{
+        const [order]=await tx.select().from(orders).where(eq(orders.id,id)).for("update");
+        if(!order||order.status!=="pending_confirmation"||!order.completionSubmittedAt||!order.userId)return;
+        const elapsed=now.getTime()-order.completionSubmittedAt.getTime();
+        if(elapsed>=24*60*60_000&&!order.completionEscalatedAt){
+          await tx.update(orders).set({completionEscalatedAt:now,completionReminderAt:order.completionReminderAt??now}).where(eq(orders.id,id));
+          await tx.insert(orderIncidents).values({orderId:id,actorId:order.userId,actorRole:"client",cleanerId:order.cleanerId,kind:"completion_timeout",reason:"confirmation_timeout",previousStatus:order.status,supportStatus:"open",supportUpdatedAt:now});
+          await tx.insert(orderEvents).values({orderId:id,eventType:"completion_support_escalated"});
+        }else if(elapsed>=15*60_000&&!order.completionReminderAt){
+          await tx.update(orders).set({completionReminderAt:now}).where(eq(orders.id,id));
+          await tx.insert(orderEvents).values({orderId:id,eventType:"completion_reminder_sent"});
         }
-      } else if (elapsed >= 15 * 60_000 && !order.reminderAt) {
-        const [updated] = await db.update(orders).set({completionReminderAt:now})
-          .where(and(eq(orders.id,order.id),eq(orders.status,"pending_confirmation"),isNull(orders.completionReminderAt))).returning({id:orders.id});
-        if (updated) {
-          await db.insert(orderEvents).values({orderId:order.id,eventType:"completion_reminder_sent"});
-          void this.notifyTelegram(order.userId,"🧹 Клинер завершил уборку. Пожалуйста, проверьте результат в CleanGo и подтвердите выполнение или сообщите о проблеме.");
-        }
-      }
+      });
     }
   }
 
@@ -633,7 +559,6 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
       await tx.insert(orderEvents).values({orderId,actorId:clientId,eventType:"completion_confirmed"});
       return order;
     });
-    if(updated.cleanerId)void this.notifyTelegram(updated.cleanerId,"✅ Клиент подтвердил выполнение уборки. Заказ завершён.");
     return {status:updated.status,clientConfirmedAt:updated.clientConfirmedAt};
   }
 
@@ -707,7 +632,6 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
       await tx.insert(orderEvents).values({ orderId, actorId: cleanerId, eventType: "cleaning_completed" });
       return updated;
     });
-    if(submitted.userId)void this.notifyTelegram(submitted.userId,this.formatOrderNotice("✨ <b>Клинер закончил уборку</b>",submitted,"Проверьте результат и подтвердите его в CleanGo либо сообщите о проблеме."));
     return submitted;
   }
 
@@ -878,8 +802,6 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
       return {status,waitStartedAt:action==="wait"?now:undefined,duplicate:false,clientId:order.userId,cleanerId:order.cleanerId};
     });
     if(!result.duplicate&&action!=="wait"){
-      const message=result.status==="cancelled"?"Заказ отменён.":result.status==="replacement_pending"?"Исполнитель отказался. Откройте заказ, чтобы подтвердить замену или отменить.":result.status==="pending"?"Начат повторный поиск исполнителя.":"Проблема зарегистрирована для рассмотрения. Финансовые решения не применяются автоматически.";
-      for(const id of [result.clientId,result.cleanerId])if(id&&id!==actorId)void this.notifyTelegram(id,message);
       if(result.status==="pending")void this.processMatchingQueue();
     }
     return {status:result.status,waitStartedAt:"waitStartedAt" in result?result.waitStartedAt:undefined};
