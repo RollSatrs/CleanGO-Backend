@@ -175,5 +175,14 @@ export const orderIncidents=pgTable("order_incidents",{
  comment:text("comment"),
  photos:text("photos").array(),
  previousStatus:text("previous_status").notNull(),
+ supportStatus:text("support_status"),
+ supportAssignedTo:uuid("support_assigned_to").references(()=>users.id),
+ supportResponse:text("support_response"),
+ supportResolvedAt:timestamp("support_resolved_at",{withTimezone:true}),
+ supportUpdatedAt:timestamp("support_updated_at",{withTimezone:true}),
  createdAt:timestamp("created_at",{withTimezone:true}).defaultNow().notNull(),
 },t=>[index("order_incidents_order_created_idx").on(t.orderId,t.createdAt),index("order_incidents_cleaner_kind_idx").on(t.cleanerId,t.kind)]);
+
+export const supportAudit=pgTable("support_audit",{
+ id:uuid("id").defaultRandom().primaryKey(),incidentId:uuid("incident_id").notNull().references(()=>orderIncidents.id),actorId:uuid("actor_id").notNull().references(()=>users.id),action:text("action").notNull(),note:text("note"),createdAt:timestamp("created_at",{withTimezone:true}).defaultNow().notNull(),
+},t=>[index("support_audit_incident_idx").on(t.incidentId,t.createdAt)]);
