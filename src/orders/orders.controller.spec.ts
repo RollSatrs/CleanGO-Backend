@@ -23,6 +23,9 @@ describe('OrdersController', () => {
     startCleaning: vi.fn(),
     completeCleaning: vi.fn(),
     leaveReview: vi.fn(),
+    reportReview:vi.fn(),
+    findOneForClient:vi.fn(),
+    cleanerReputation:vi.fn(),
   };
 
   beforeEach(async () => {
@@ -145,6 +148,29 @@ describe('OrdersController', () => {
       await expect(controller.cleanerLocation({user} as never,coords)).rejects.toBeInstanceOf(ForbiddenException);
     }
     expect(ordersServiceMock.refreshCleanerLocation).toHaveBeenCalledTimes(1);
+  });
+
+  it("only verified assigned cleaners may submit review reports through scoped service",async()=>{
+    const request={user:{id:"cleaner-1",role:"cleaner",phoneVerifiedAt:new Date()}};
+    ordersServiceMock.reportReview.mockResolvedValue({reported:true});
+    await expect(controller.reviewReport("job-1",request as never,{reason:"abuse"})).resolves.toEqual({reported:true});
+    expect(ordersServiceMock.reportReview).toHaveBeenCalledWith("job-1","cleaner-1","abuse",undefined);
+    await expect(controller.reviewReport("job-1",request as never,{reason:"unknown"})).rejects.toBeInstanceOf(BadRequestException);
+    for(const user of [{id:"client",role:"client",phoneVerifiedAt:new Date()},{id:"cleaner",role:"cleaner",phoneVerifiedAt:null}]){
+      await expect(controller.reviewReport("job-1",{user} as never,{reason:"abuse"})).rejects.toBeInstanceOf(ForbiddenException);
+    }
+  });
+  it("only verified clients can leave reviews and see reputation of their assigned cleaner",async()=>{
+    const request={user:{id:"client-1",role:"client",phoneVerifiedAt:new Date()}};
+    for(const user of [{id:"cleaner",role:"cleaner",phoneVerifiedAt:new Date()},{id:"client",role:"client",phoneVerifiedAt:null}]){
+      await expect(controller.review("job-1",{user} as never,{rating:5})).rejects.toBeInstanceOf(ForbiddenException);
+    }
+    ordersServiceMock.findOneForClient.mockResolvedValue({cleanerId:"cleaner-1",status:"cancelled"});
+    await expect(controller.reputation("job-1",request as never)).rejects.toBeInstanceOf(NotFoundException);
+    ordersServiceMock.findOneForClient.mockResolvedValue({cleanerId:"cleaner-1",status:"completed"});
+    ordersServiceMock.cleanerReputation.mockResolvedValue({rating:4.5});
+    await expect(controller.reputation("job-1",request as never)).resolves.toEqual({rating:4.5});
+    expect(ordersServiceMock.findOneForClient).toHaveBeenCalledWith("job-1","client-1");
   });
 
 });
