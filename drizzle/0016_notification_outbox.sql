@@ -51,7 +51,7 @@ BEGIN
   ON CONFLICT(dedupe_key) DO NOTHING;
  END IF;
  RETURN NEW;
-END $$;
+END; $;
 --> statement-breakpoint
 CREATE TRIGGER cleango_event_notice AFTER INSERT ON order_events FOR EACH ROW EXECUTE FUNCTION cleango_queue_event_notice();
 --> statement-breakpoint
@@ -63,7 +63,7 @@ BEGIN
  VALUES ('offer:'||NEW.id||':'||NEW.batch_number,NEW.cleaner_id,NEW.order_id,'new_offer','Вам предложен новый заказ CleanGo. Откройте приложение, пока предложение активно.',NEW.id,NEW.batch_number,NEW.expires_at)
  ON CONFLICT(dedupe_key) DO NOTHING;
  RETURN NEW;
-END $$;
+END; $;
 --> statement-breakpoint
 CREATE TRIGGER cleango_offer_notice AFTER INSERT OR UPDATE ON order_offers FOR EACH ROW EXECUTE FUNCTION cleango_queue_offer_notice();
 --> statement-breakpoint
@@ -76,6 +76,6 @@ BEGIN
  VALUES ('support:'||NEW.id,c.actor_id,c.order_id,'support_update','Поддержка обновила ваше обращение. Откройте раздел «Поддержка» в CleanGo.')
  ON CONFLICT(dedupe_key) DO NOTHING;
  RETURN NEW;
-END $$;
+END; $;
 --> statement-breakpoint
 CREATE TRIGGER cleango_support_notice AFTER INSERT ON support_audit FOR EACH ROW EXECUTE FUNCTION cleango_queue_support_notice();
