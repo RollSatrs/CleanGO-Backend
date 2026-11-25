@@ -186,3 +186,7 @@ export const orderIncidents=pgTable("order_incidents",{
 export const supportAudit=pgTable("support_audit",{
  id:uuid("id").defaultRandom().primaryKey(),incidentId:uuid("incident_id").notNull().references(()=>orderIncidents.id),actorId:uuid("actor_id").notNull().references(()=>users.id),action:text("action").notNull(),note:text("note"),createdAt:timestamp("created_at",{withTimezone:true}).defaultNow().notNull(),
 },t=>[index("support_audit_incident_idx").on(t.incidentId,t.createdAt)]);
+
+export const notificationOutbox=pgTable("notification_outbox",{
+ id:uuid("id").defaultRandom().primaryKey(),dedupeKey:text("dedupe_key").notNull().unique(),recipientId:uuid("recipient_id").notNull().references(()=>users.id),orderId:uuid("order_id").notNull().references(()=>orders.id),kind:text("kind").notNull(),message:text("message").notNull(),offerId:uuid("offer_id"),offerRound:integer("offer_round"),expiresAt:timestamp("expires_at",{withTimezone:true}),status:text("status").notNull().default("pending"),attempts:integer("attempts").notNull().default(0),nextAttemptAt:timestamp("next_attempt_at",{withTimezone:true}).notNull().defaultNow(),leaseUntil:timestamp("lease_until",{withTimezone:true}),leaseToken:uuid("lease_token"),createdAt:timestamp("created_at",{withTimezone:true}).notNull().defaultNow(),sentAt:timestamp("sent_at",{withTimezone:true}),lastError:text("last_error"),
+},t=>[index("notification_outbox_due_idx").on(t.status,t.nextAttemptAt,t.leaseUntil)]);
