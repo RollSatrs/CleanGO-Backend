@@ -7,6 +7,7 @@ import { orders, orderOffers, orderEvents, cleanerProfiles, users, userAvatars, 
 import { rankCandidates, selectOfferBatch, type MatchingCandidate } from "./matching-engine.js";
 import { locationIsFresh, availabilityStatus, availabilityExpiresAt, type AvailabilityHours } from "./cleaner-availability.js";
 
+import { isSupportCase } from "../support/support-rules.js";
 import { validRating, normalizedReview, matchingRating, reviewReportReasons } from "./review-rules.js";
 import { publicReputation } from "./reputation.js";
 import { allowedException, needsWait, waitElapsed, exceptionReasons, type ExceptionAction, type ExceptionRole } from "./order-exceptions.js";
@@ -668,7 +669,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
       if(!order||order.status!=="completed"||order.rating==null)throw new ConflictException("Отзыв недоступен");
       const [existing]=await tx.select({id:orderIncidents.id}).from(orderIncidents).where(and(eq(orderIncidents.orderId,orderId),eq(orderIncidents.actorId,cleanerId),eq(orderIncidents.kind,"review_report"))).limit(1);
       if(existing)return {reported:true};
-      await tx.insert(orderIncidents).values({orderId,actorId:cleanerId,actorRole:"cleaner",cleanerId,kind:"review_report",reason,comment:comment?.trim()||null,previousStatus:order.status});
+      await tx.insert(orderIncidents).values({orderId,actorId:cleanerId,actorRole:"cleaner",cleanerId,kind:"review_report",reason,comment:comment?.trim()||null,previousStatus:order.status,supportStatus:"open",supportUpdatedAt:new Date()});
       await tx.insert(orderEvents).values({orderId,actorId:cleanerId,eventType:"review_reported"});
       return {reported:true};
     });
@@ -864,7 +865,9 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
       if(action==="replacement")status="pending";
       if(action==="issue"&&order.status!=="completed")status="disputed";
       const detach=action==="replacement"||(action==="release"&&status==="replacement_pending");
-      await tx.insert(orderIncidents).values({...(input.requestId?{id:input.requestId}:{}),orderId,actorId,actorRole:role,cleanerId:order.cleanerId,kind:detach?"released":action,reason,comment,photos,previousStatus:order.status,createdAt:now});
+      const incidentKind=detach?"released":action;
+      const needsSupport=isSupportCase(incidentKind,reason,order.status);
+      await tx.insert(orderIncidents).values({...(input.requestId?{id:input.requestId}:{}),orderId,actorId,actorRole:role,cleanerId:order.cleanerId,kind:incidentKind,reason,comment,photos,previousStatus:order.status,createdAt:now,...(needsSupport?{supportStatus:"open",supportUpdatedAt:now}:{})});
       if(status!==order.status){
         await tx.update(orders).set({status,...(detach?{cleanerId:null,acceptedAt:null,travelMode:null,etaMinutes:null,etaCalculatedAt:null,matchingStartedAt:now}:{}),...(status==="disputed"?{completionIssueAt:now}:{})}).where(eq(orders.id,orderId));
         await tx.update(orderOffers).set({status:"revoked",respondedAt:now}).where(and(eq(orderOffers.orderId,orderId),eq(orderOffers.status,"offered")));
