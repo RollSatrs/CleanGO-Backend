@@ -45,6 +45,8 @@ export class SupportService {
      if(!incident)throw new NotFoundException("Обращение не найдено");
      if(incident.supportStatus==="resolved")throw new ConflictException("Обращение уже закрыто");
      if(incident.supportAssignedTo&&incident.supportAssignedTo!==actorId)throw new ConflictException("Обращение уже назначено другому сотруднику");
+     // Serialize resuming an assignment with the normal cleaner acceptance path.
+     if(action==="resume_disputed"&&incident.cleanerId){await tx.select({id:cleanerProfiles.userId}).from(cleanerProfiles).where(eq(cleanerProfiles.userId,incident.cleanerId)).for("update");}
      const [order]=await tx.select().from(orders).where(eq(orders.id,incident.orderId)).for("update");
      if(!order)throw new NotFoundException("Заказ не найден");
      const now=new Date();
@@ -56,7 +58,7 @@ export class SupportService {
      }else if(action==="cancel_disputed"||action==="resume_disputed"){
        if(order.status!=="disputed"||incident.kind==="review_report")throw new ConflictException("Заказ уже не в споре");
        if(action==="resume_disputed"){
-         if(!order.cleanerId||!["accepted","en_route","arrived","in_progress","pending_confirmation"].includes(incident.previousStatus))throw new ConflictException("Нельзя возобновить этот заказ");
+         if(!order.cleanerId||order.cleanerId!==incident.cleanerId||!["accepted","en_route","arrived","in_progress","pending_confirmation"].includes(incident.previousStatus))throw new ConflictException("Нельзя возобновить этот заказ");
          const [other]=await tx.select({id:orders.id}).from(orders).where(and(eq(orders.cleanerId,order.cleanerId),inArray(orders.status,["accepted","en_route","arrived","in_progress"]),sql`${orders.id} <> ${order.id}`)).limit(1);
          if(other&&incident.previousStatus!=="pending_confirmation")throw new ConflictException("У клинера есть другой активный заказ");
        }
