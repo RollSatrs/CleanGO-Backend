@@ -3,7 +3,7 @@ import { Injectable, ConflictException, BadRequestException, Logger, OnModuleIni
 import { eq, desc, and, isNull, gt, gte, lte, sql, inArray, notInArray, count, or } from "drizzle-orm";
 
 import { db } from "../db/index.js";
-import { orders, orderOffers, orderEvents, cleanerProfiles, users, userAvatars, orderIncidents } from "../db/schema.js";
+import { orders, orderOffers, orderEvents, cleanerProfiles, users, userAvatars, orderIncidents, notificationOutbox } from "../db/schema.js";
 import { rankCandidates, selectOfferBatch, type MatchingCandidate } from "./matching-engine.js";
 import { locationIsFresh, availabilityStatus, availabilityExpiresAt, type AvailabilityHours } from "./cleaner-availability.js";
 
@@ -56,32 +56,10 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
 
   /** Recent activity for the authenticated user; never expose another user's orders. */
   async getNotifications(userId: string, role: string) {
-    if (role !== "client" && role !== "cleaner") return [];
-    if (role === "client") {
-      const rows = await db.select({
-        id: orderEvents.id, orderId: orderEvents.orderId,
-        type: orderEvents.eventType, createdAt: orderEvents.createdAt,
-      }).from(orderEvents).innerJoin(orders, eq(orderEvents.orderId, orders.id))
-        .where(eq(orders.userId, userId)).orderBy(desc(orderEvents.createdAt)).limit(80);
-      return rows.filter(row => [
-        "order_accepted", "cleaner_en_route", "cleaner_arrived",
-        "cleaning_started", "cleaning_completed", "completion_reminder_sent", "completion_confirmed", "completion_issue_reported", "matching_timeout", "order_cancelled", "cleaner_released", "replacement_started", "order_issue_reported", "client_wait_started",
-      ].includes(row.type));
-    }
-    const events = await db.select({
-      id: orderEvents.id, orderId: orderEvents.orderId,
-      type: orderEvents.eventType, createdAt: orderEvents.createdAt,
-    }).from(orderEvents).innerJoin(orders, eq(orderEvents.orderId, orders.id))
-      .where(eq(orders.cleanerId, userId)).orderBy(desc(orderEvents.createdAt)).limit(60);
-    const offers = await db.select({
-      id: orderOffers.id, orderId: orderOffers.orderId,
-      createdAt: orderOffers.createdAt,
-    }).from(orderOffers).where(eq(orderOffers.cleanerId, userId))
-      .orderBy(desc(orderOffers.createdAt)).limit(40);
-    return [...events.filter(row => [
-      "order_accepted", "cleaning_completed", "completion_confirmed", "order_cancelled",
-    ].includes(row.type)).map(row => ({ ...row, type: row.type === "order_accepted" ? "cleaner_order_accepted" : row.type === "cleaning_completed" ? "cleaner_job_completed" : "cleaner_order_cancelled" })), ...offers.map(offer => ({ ...offer, type: "new_offer" }))]
-      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()).slice(0, 80);
+    if(role!=="client"&&role!=="cleaner")return [];
+    return db.select({id:notificationOutbox.id,orderId:notificationOutbox.orderId,type:notificationOutbox.kind,createdAt:notificationOutbox.createdAt})
+      .from(notificationOutbox).where(and(eq(notificationOutbox.recipientId,userId),or(sql`${notificationOutbox.expiresAt} IS NULL`,gt(notificationOutbox.expiresAt,new Date())),sql`${notificationOutbox.status} <> 'expired'`))
+      .orderBy(desc(notificationOutbox.createdAt)).limit(80);
   }
 
   async getCleanerProfile(cleanerId: string) {
