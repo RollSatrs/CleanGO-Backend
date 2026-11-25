@@ -93,6 +93,7 @@ export const orders = pgTable("orders", {
   rating: numeric("rating", { precision: 2, scale: 1, mode: "number" }),
   reviewText: text("review_text"),
   reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
+  reviewVisibility: text("review_visibility").notNull().default("published"),
 
   latitude: numeric("latitude", { precision: 9, scale: 6 }),
   longitude: numeric("longitude", { precision: 9, scale: 6 }),
