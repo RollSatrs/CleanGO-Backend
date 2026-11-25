@@ -18,6 +18,7 @@ import {
 import type { Request } from "express";
 import { IsArray, IsBoolean, IsIn, IsInt, IsNumber, IsOptional, IsISO8601, IsString, IsUUID, MaxLength, ArrayMaxSize, Max, Min, ArrayNotEmpty, ArrayUnique } from "class-validator";
 
+import { validRating, normalizedReview, reviewReportReasons } from "./review-rules.js";
 import { exceptionActions, exceptionReasons, type ExceptionAction } from "./order-exceptions.js";
 import { clientHistorySections, type ClientHistorySection } from "./order-history.js";
 import { OrdersService } from "./orders.service.js";
@@ -304,20 +305,28 @@ export class OrdersController {
   }
 
   @Post(":id/review")
-  async review(@Param("id") id:string,@Req() request:Request,@Body() body:{rating:number;reviewText?:string}) {
+  async review(@Param("id",ParseUUIDPipe) id:string,@Req() request:Request,@Body() body:{rating:number;reviewText?:string}) {
     const user=(request as AuthenticatedRequest).user;
     if(user.role!=="client"||!user.phoneVerifiedAt)throw new ForbiddenException("Требуется клиент");
-    if(!body||!Number.isFinite(body.rating)||body.rating<0.5||body.rating>5||!Number.isInteger(body.rating*2)|| (body.reviewText!=null && (typeof body.reviewText!=="string"||body.reviewText.length>1000)))
-      throw new BadRequestException("Неверная оценка или текст отзыва");
+    if(!body||!validRating(body.rating))throw new BadRequestException("Неверная оценка");
+    try{normalizedReview(body.reviewText);}catch{throw new BadRequestException("Неверный текст отзыва");}
     return this.ordersService.leaveReview(id,user.id,body.rating,body.reviewText);
   }
 
+  @Post(":id/review-report")
+  async reviewReport(@Param("id",ParseUUIDPipe) id:string,@Req() request:Request,@Body() body:{reason:string;comment?:string}){
+    const user=(request as AuthenticatedRequest).user;
+    if(user.role!=="cleaner"||!user.phoneVerifiedAt)throw new ForbiddenException("Требуется подтверждённый клинер");
+    if(!body||!reviewReportReasons.includes(body.reason as typeof reviewReportReasons[number])||(body.comment!=null&&(typeof body.comment!=="string"||body.comment.length>1000)))throw new BadRequestException("Некорректная жалоба");
+    return this.ordersService.reportReview(id,user.id,body.reason,body.comment);
+  }
+
   @Get(":id/cleaner-reputation")
-  async reputation(@Param("id") id:string,@Req() request:Request) {
+  async reputation(@Param("id",ParseUUIDPipe) id:string,@Req() request:Request) {
     const user=(request as AuthenticatedRequest).user;
     if(user.role!=="client"||!user.phoneVerifiedAt)throw new ForbiddenException("Требуется клиент");
     const order=await this.ordersService.findOneForClient(id,user.id);
-    if(!order?.cleanerId)throw new NotFoundException("Клинер не найден");
+    if(!order?.cleanerId||!["accepted","en_route","arrived","in_progress","pending_confirmation","completed","disputed"].includes(order.status))throw new NotFoundException("Клинер не найден");
     return this.ordersService.cleanerReputation(order.cleanerId);
   }
 
