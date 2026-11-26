@@ -57,7 +57,9 @@ export class AdminDataService{
  }
  async reviews(page:number){
    const rows=await db.select({...orderFields,reviewText:orders.reviewText,reviewedAt:orders.reviewedAt}).from(orders).where(isNotNull(orders.rating)).orderBy(desc(orders.reviewedAt),desc(orders.id)).limit(21).offset((page-1)*20);
-   return {items:rows.slice(0,20),hasMore:rows.length>20};
+   const items=rows.slice(0,20);
+   const names=await this.participants(items);
+   return {items:items.map(o=>({...o,clientName:o.userId?names.get(o.userId)??null:null,cleanerName:o.cleanerId?names.get(o.cleanerId)??null:null})),hasMore:rows.length>20};
  }
  async dashboard(){
    const [daily,services,statuses,rating,latest,team,recentCases]=await Promise.all([
