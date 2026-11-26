@@ -2,7 +2,7 @@ import {Injectable,NotFoundException} from "@nestjs/common";
 import {and,desc,eq,or,sql,count,isNotNull,inArray} from "drizzle-orm";
 import {db} from "../db/index.js";
 import {orders,users,cleanerProfiles,orderIncidents,orderEvents,userAvatars} from "../db/schema.js";
-const orderFields={id:orders.id,userId:orders.userId,cleanerId:orders.cleanerId,status:orders.status,cleaningType:orders.cleaningType,area:orders.area,price:orders.price,createdAt:orders.createdAt,rating:orders.rating,reviewVisibility:orders.reviewVisibility};
+const orderFields={id:orders.id,userId:orders.userId,cleanerId:orders.cleanerId,status:orders.status,cleaningType:orders.cleaningType,area:orders.area,price:orders.price,createdAt:orders.createdAt,rating:orders.rating,reviewVisibility:orders.reviewVisibility,photoCount:sql<number>`coalesce(cardinality(${orders.completionPhotos}),0)::int`};
 @Injectable()
 export class AdminDataService{
  // Keep lists compact: images are fetched individually through the owner guard.
@@ -34,29 +34,37 @@ export class AdminDataService{
  }
  async usersPage(page:number,role?:string,q?:string){
    const search=q?.trim().slice(0,100);
-   const where=and(role?eq(users.role,role):undefined,search?sql`concat_ws(' ',${users.firstName},${users.lastName},${users.id}::text) ILIKE ${"%"+search+"%"}`:undefined);
-   const rows=await db.select({id:users.id,role:users.role,firstName:users.firstName,lastName:users.lastName,verified:sql<boolean>`${users.phoneVerifiedAt} IS NOT NULL`,createdAt:users.createdAt,isAvailable:cleanerProfiles.isAvailable,availableUntil:cleanerProfiles.availableUntil}).from(users).leftJoin(cleanerProfiles,eq(cleanerProfiles.userId,users.id)).where(where).orderBy(desc(users.createdAt),desc(users.id)).limit(21).offset((page-1)*20);
+   const where=and(role?eq(users.role,role):undefined,search?sql`concat_ws(' ',${users.firstName},${users.lastName},${users.phone},${users.id}::text) ILIKE ${"%"+search+"%"}`:undefined);
+   const rows=await db.select({id:users.id,role:users.role,firstName:users.firstName,lastName:users.lastName,verified:sql<boolean>`${users.phoneVerifiedAt} IS NOT NULL`,createdAt:users.createdAt,orderCount:sql<number>`(SELECT count(*)::int FROM orders o WHERE o.user_id=${users.id} OR o.cleaner_id=${users.id})`,completedCount:sql<number>`(SELECT count(*)::int FROM orders o WHERE (o.user_id=${users.id} OR o.cleaner_id=${users.id}) AND o.status='completed')`,rating:sql<number|null>`(SELECT round(avg(o.rating),2)::float FROM orders o WHERE o.cleaner_id=${users.id} AND o.status='completed' AND o.review_visibility='published')`,isAvailable:cleanerProfiles.isAvailable,availableUntil:cleanerProfiles.availableUntil}).from(users).leftJoin(cleanerProfiles,eq(cleanerProfiles.userId,users.id)).where(where).orderBy(desc(users.createdAt),desc(users.id)).limit(21).offset((page-1)*20);
    return {items:rows.slice(0,20),hasMore:rows.length>20};
  }
  async user(id:string){
-   const [u]=await db.select({id:users.id,role:users.role,firstName:users.firstName,lastName:users.lastName,verified:sql<boolean>`${users.phoneVerifiedAt} IS NOT NULL`,createdAt:users.createdAt,isAvailable:cleanerProfiles.isAvailable,availableUntil:cleanerProfiles.availableUntil,serviceTypes:cleanerProfiles.serviceTypes,serviceRadiusKm:cleanerProfiles.serviceRadiusKm}).from(users).leftJoin(cleanerProfiles,eq(cleanerProfiles.userId,users.id)).where(eq(users.id,id)).limit(1);
+   const [u]=await db.select({id:users.id,role:users.role,firstName:users.firstName,lastName:users.lastName,verified:sql<boolean>`${users.phoneVerifiedAt} IS NOT NULL`,createdAt:users.createdAt,phone:users.phone,isAvailable:cleanerProfiles.isAvailable,availableUntil:cleanerProfiles.availableUntil,serviceTypes:cleanerProfiles.serviceTypes,serviceRadiusKm:cleanerProfiles.serviceRadiusKm}).from(users).leftJoin(cleanerProfiles,eq(cleanerProfiles.userId,users.id)).where(eq(users.id,id)).limit(1);
    if(!u)throw new NotFoundException("Пользователь не найден");
    const where=or(eq(orders.userId,id),eq(orders.cleanerId,id));
    const stats=await db.select({status:orders.status,count:count()}).from(orders).where(where).groupBy(orders.status);
    const recent=await this.ordersPage(1,undefined,undefined,id);
    const cases=await db.select({id:orderIncidents.id,orderId:orderIncidents.orderId,kind:orderIncidents.kind,status:orderIncidents.supportStatus,createdAt:orderIncidents.createdAt}).from(orderIncidents).where(and(eq(orderIncidents.actorId,id),isNotNull(orderIncidents.supportStatus))).orderBy(desc(orderIncidents.createdAt)).limit(20);
-   return {user:u,stats,orders:recent,cases};
+   const reviewScope=u.role==="cleaner"?eq(orders.cleanerId,id):eq(orders.userId,id);
+   const [reviewRows,distribution,photoOrders]=await Promise.all([
+     db.select({...orderFields,reviewText:orders.reviewText,reviewedAt:orders.reviewedAt}).from(orders).where(and(reviewScope,eq(orders.status,"completed"),isNotNull(orders.rating))).orderBy(desc(orders.reviewedAt),desc(orders.id)).limit(6),
+     db.select({rating:orders.rating,count:count()}).from(orders).where(and(reviewScope,eq(orders.status,"completed"),eq(orders.reviewVisibility,"published"),isNotNull(orders.rating))).groupBy(orders.rating),
+     db.select({id:orders.id,photoCount:sql<number>`coalesce(cardinality(${orders.completionPhotos}),0)::int`}).from(orders).where(and(where,sql`cardinality(${orders.completionPhotos})>0`)).orderBy(desc(orders.createdAt)).limit(6)
+   ]);
+   const names=await this.participants(reviewRows);
+   const reviews=reviewRows.map(o=>({...o,clientName:o.userId?names.get(o.userId)??null:null,cleanerName:o.cleanerId?names.get(o.cleanerId)??null:null}));
+   return {user:u,stats,orders:recent,cases,reviews,distribution,photoOrders};
  }
  async order(id:string){
-   const [o]=await db.select({...orderFields,completionSubmittedAt:orders.completionSubmittedAt,clientConfirmedAt:orders.clientConfirmedAt,inspectionMethod:orders.inspectionMethod,reviewText:orders.reviewText,photoCount:sql<number>`coalesce(cardinality(${orders.completionPhotos}),0)::int`}).from(orders).where(eq(orders.id,id)).limit(1);
+   const [o]=await db.select({...orderFields,address:orders.address,completionSubmittedAt:orders.completionSubmittedAt,clientConfirmedAt:orders.clientConfirmedAt,inspectionMethod:orders.inspectionMethod,reviewText:orders.reviewText,photoCount:sql<number>`coalesce(cardinality(${orders.completionPhotos}),0)::int`}).from(orders).where(eq(orders.id,id)).limit(1);
    if(!o)throw new NotFoundException("Заказ не найден");
    const events=await db.select({id:orderEvents.id,eventType:orderEvents.eventType,createdAt:orderEvents.createdAt}).from(orderEvents).where(eq(orderEvents.orderId,id)).orderBy(desc(orderEvents.createdAt)).limit(100);
    const cases=await db.select({id:orderIncidents.id,kind:orderIncidents.kind,reason:orderIncidents.reason,status:orderIncidents.supportStatus,createdAt:orderIncidents.createdAt}).from(orderIncidents).where(eq(orderIncidents.orderId,id)).orderBy(desc(orderIncidents.createdAt)).limit(30);
    const names=await this.participants([o]);
    return {order:{...o,clientName:o.userId?names.get(o.userId)??null:null,cleanerName:o.cleanerId?names.get(o.cleanerId)??null:null},events,cases};
  }
- async reviews(page:number){
-   const rows=await db.select({...orderFields,reviewText:orders.reviewText,reviewedAt:orders.reviewedAt}).from(orders).where(isNotNull(orders.rating)).orderBy(desc(orders.reviewedAt),desc(orders.id)).limit(21).offset((page-1)*20);
+ async reviews(page:number,userId?:string){
+   const rows=await db.select({...orderFields,reviewText:orders.reviewText,reviewedAt:orders.reviewedAt}).from(orders).where(and(isNotNull(orders.rating),userId?or(eq(orders.userId,userId),eq(orders.cleanerId,userId)):undefined)).orderBy(desc(orders.reviewedAt),desc(orders.id)).limit(21).offset((page-1)*20);
    const items=rows.slice(0,20);
    const names=await this.participants(items);
    return {items:items.map(o=>({...o,clientName:o.userId?names.get(o.userId)??null:null,cleanerName:o.cleanerId?names.get(o.cleanerId)??null:null})),hasMore:rows.length>20};
