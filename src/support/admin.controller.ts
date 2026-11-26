@@ -11,7 +11,7 @@ export class AdminController{
  @Header("Cache-Control","no-store") @Post("session/verify") verify(@Body() body:{challengeId?:unknown;code?:unknown}){return this.auth.verify(body?.challengeId,body?.code);}
  @UseGuards(AdminGuard) @Get("session/me") me(@Req() req:AdminRequest){return {id:req.admin.id,name:req.admin.name};}
  @UseGuards(AdminGuard) @Post("session/logout") logout(@Req() req:AdminRequest){this.auth.logout(req.adminToken);return {ok:true};}
- @UseGuards(AdminGuard) @Get("dashboard") async dashboard(){return {...await this.support.overview(),...await this.data.dashboard()};}
+ @UseGuards(AdminGuard) @Get("dashboard") async dashboard(@Query("days") value="14"){const days=Number(value);if(!Number.isInteger(days)||days<1||days>90)throw new BadRequestException("Период: от 1 до 90 дней");return {...await this.support.overview(),...await this.data.dashboard(days)};}
  @UseGuards(AdminGuard) @Get("orders") orders(@Query("page") p="1",@Query("status") status?:string,@Query("q") q?:string,@Query("userId") userId?:string){if(userId&&!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(userId))throw new BadRequestException("Некорректный ID");return this.data.ordersPage(page(p),status,q,userId);}
  @UseGuards(AdminGuard) @Get("orders/:id") order(@Param("id",ParseUUIDPipe) id:string){return this.data.order(id);}
  @UseGuards(AdminGuard) @Get("users") users(@Query("page") p="1",@Query("role") role?:string,@Query("q") q?:string){return this.data.usersPage(page(p),role,q);}

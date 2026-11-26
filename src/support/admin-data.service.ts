@@ -44,7 +44,7 @@ export class AdminDataService{
    const where=or(eq(orders.userId,id),eq(orders.cleanerId,id));
    const stats=await db.select({status:orders.status,count:count()}).from(orders).where(where).groupBy(orders.status);
    const recent=await this.ordersPage(1,undefined,undefined,id);
-   const cases=await db.select({id:orderIncidents.id,orderId:orderIncidents.orderId,kind:orderIncidents.kind,status:orderIncidents.supportStatus,createdAt:orderIncidents.createdAt}).from(orderIncidents).where(and(eq(orderIncidents.actorId,id),isNotNull(orderIncidents.supportStatus))).orderBy(desc(orderIncidents.createdAt)).limit(20);
+   const cases=await db.select({id:orderIncidents.id,orderId:orderIncidents.orderId,kind:orderIncidents.kind,status:orderIncidents.supportStatus,createdAt:orderIncidents.createdAt}).from(orderIncidents).where(and(or(eq(orderIncidents.actorId,id),sql`EXISTS (SELECT 1 FROM orders o WHERE o.id=${orderIncidents.orderId} AND (o.user_id=${id} OR o.cleaner_id=${id}))`),isNotNull(orderIncidents.supportStatus))).orderBy(desc(orderIncidents.createdAt)).limit(20);
    const reviewScope=u.role==="cleaner"?eq(orders.cleanerId,id):eq(orders.userId,id);
    const [reviewRows,distribution,photoOrders]=await Promise.all([
      db.select({...orderFields,reviewText:orders.reviewText,reviewedAt:orders.reviewedAt}).from(orders).where(and(reviewScope,eq(orders.status,"completed"),isNotNull(orders.rating))).orderBy(desc(orders.reviewedAt),desc(orders.id)).limit(6),
@@ -69,9 +69,9 @@ export class AdminDataService{
    const names=await this.participants(items);
    return {items:items.map(o=>({...o,clientName:o.userId?names.get(o.userId)??null:null,cleanerName:o.cleanerId?names.get(o.cleanerId)??null:null})),hasMore:rows.length>20};
  }
- async dashboard(){
+ async dashboard(days=14){
    const [daily,services,statuses,rating,latest,team,recentCases]=await Promise.all([
-     db.execute(sql`SELECT to_char(d,'YYYY-MM-DD') AS day, count(o.id)::int AS orders, count(o.id) FILTER (WHERE o.status='completed')::int AS completed FROM generate_series((now() AT TIME ZONE 'Asia/Almaty')::date-13,(now() AT TIME ZONE 'Asia/Almaty')::date,interval '1 day') d LEFT JOIN orders o ON (o.created_at AT TIME ZONE 'Asia/Almaty')::date=d::date GROUP BY d ORDER BY d`),
+     db.execute(sql`SELECT to_char(d,'YYYY-MM-DD') AS day, count(o.id)::int AS orders, count(o.id) FILTER (WHERE o.status='completed')::int AS completed FROM generate_series((now() AT TIME ZONE 'Asia/Almaty')::date-(${days}-1),(now() AT TIME ZONE 'Asia/Almaty')::date,interval '1 day') d LEFT JOIN orders o ON (o.created_at AT TIME ZONE 'Asia/Almaty')::date=d::date GROUP BY d ORDER BY d`),
      db.select({type:orders.cleaningType,count:count()}).from(orders).groupBy(orders.cleaningType),
      db.select({status:orders.status,count:count()}).from(orders).groupBy(orders.status),
      db.execute(sql`SELECT round(avg(rating),2)::float AS average,count(rating)::int AS count FROM orders WHERE status='completed' AND review_visibility='published'`),
